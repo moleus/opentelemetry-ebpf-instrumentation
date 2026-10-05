@@ -82,7 +82,7 @@ COPY --from=javaagent-builder /build/build/obi-java-agent.jar /src/pkg/internal/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
 	/generate.sh \
-	&& make compile CMD=${CMD} RELEASE_VERSION=${RELEASE_VERSION} RELEASE_REVISION=${RELEASE_REVISION}
+	&& make compile CMD=${CMD} MAIN_GO_FILE=./cmd/${CMD} RELEASE_VERSION=${RELEASE_VERSION} RELEASE_REVISION=${RELEASE_REVISION}
 
 # Create final image from minimal + built binary
 FROM scratch
