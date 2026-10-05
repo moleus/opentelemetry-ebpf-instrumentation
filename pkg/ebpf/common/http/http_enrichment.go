@@ -19,7 +19,10 @@ import (
 	"go.opentelemetry.io/obi/pkg/config"
 )
 
-const userAgentHeader = "user-agent"
+const (
+	userAgentHeader = "user-agent"
+	hostHeader      = "Host"
+)
 
 // HTTPEnricher applies HTTP enrichment rules to extract headers and body
 // content into spans. Rules are split by type at construction time so that
@@ -93,7 +96,7 @@ func (e *HTTPEnricher) Enrich(
 	req *http.Request,
 	resp *http.Response,
 ) bool {
-	reqHeaders := e.processHeaders(req.Header, config.HTTPParsingScopeRequest, baseSpan)
+	reqHeaders := e.processHeaders(requestHeadersWithHost(req), config.HTTPParsingScopeRequest, baseSpan)
 	respHeaders := e.processHeaders(resp.Header, config.HTTPParsingScopeResponse, baseSpan)
 
 	reqBody := e.processBody(req.Header, readRequestBody(req), config.HTTPParsingScopeRequest, baseSpan)
@@ -117,6 +120,22 @@ func (e *HTTPEnricher) Enrich(
 		baseSpan.ResponseBodyContent = respBody
 	}
 	return true
+}
+
+// requestHeadersWithHost returns the request headers including Host. The
+// net/http parser moves the Host header into req.Host and removes it from
+// req.Header, so header rules could never match it. The caller's header map
+// is not modified: a shallow copy is returned when Host has to be added.
+func requestHeadersWithHost(req *http.Request) http.Header {
+	if req.Host == "" || len(req.Header[hostHeader]) > 0 {
+		return req.Header
+	}
+	headers := make(http.Header, len(req.Header)+1)
+	for name, values := range req.Header {
+		headers[name] = values
+	}
+	headers[hostHeader] = []string{req.Host}
+	return headers
 }
 
 // processHeaders evaluates header rules and returns a map of headers to
