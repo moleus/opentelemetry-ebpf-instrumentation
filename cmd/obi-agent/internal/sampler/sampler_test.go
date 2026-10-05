@@ -101,6 +101,16 @@ func TestDecide_RateLimit(t *testing.T) {
 	assert.Equal(t, 8.0, testutil.ToFloat64(s.metrics.dropped.WithLabelValues("default", reasonRateLimit)))
 }
 
+func TestDecide_RuleOwnLimit(t *testing.T) {
+	c := &clock{t: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
+	s := newSampler(t, "rules: [{name: slow, match: {namespace: ns}, ratio: 1, spans_per_second: 0.5}]", c)
+
+	assert.True(t, s.Decide(serverSpan("ns", "app", 0.9)), "a rate below 1/s lets one span through")
+	assert.False(t, s.Decide(serverSpan("ns", "app", 0.9)))
+	c.t = c.t.Add(2 * time.Second)
+	assert.True(t, s.Decide(serverSpan("ns", "app", 0.9)))
+}
+
 func TestSetRules_AppliesToTheNextSpan(t *testing.T) {
 	c := &clock{t: time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)}
 	s := newSampler(t, "default: {ratio: 0}", c)
