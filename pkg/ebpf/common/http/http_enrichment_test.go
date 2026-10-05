@@ -1514,3 +1514,96 @@ func TestBodyExtraction_MultipleObfuscateRulesDistinctStrings(t *testing.T) {
 	assert.NotContains(t, val, "123-45-6789")
 	assert.Contains(t, val, `"alice"`)
 }
+
+func hostHeaderConfig(defaultAction, ruleAction config.HTTPParsingAction) config.EnrichmentConfig {
+	cfg := config.EnrichmentConfig{
+		Enabled: true,
+		Policy: config.HTTPParsingPolicy{
+			DefaultAction: config.HTTPParsingDefaultAction{
+				Headers: defaultAction,
+				Body:    config.HTTPParsingActionExclude,
+			},
+			DefaultObfuscationString: "***",
+		},
+	}
+	if ruleAction != 0 {
+		cfg.Rules = []config.HTTPParsingRule{{
+			Action: ruleAction,
+			Type:   config.HTTPParsingRuleTypeHeaders,
+			Scope:  config.HTTPParsingScopeRequest,
+			Match: config.HTTPParsingMatch{
+				Patterns: []services.GlobAttr{gi("host")},
+			},
+		}}
+	}
+	return cfg
+}
+
+// net/http moves the Host header into req.Host, so it is not in req.Header.
+func TestGenericParsingSpan_HostHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		defaultAction config.HTTPParsingAction
+		ruleAction    config.HTTPParsingAction
+		want          []string
+	}{
+		{
+			name:          "include rule",
+			defaultAction: config.HTTPParsingActionExclude,
+			ruleAction:    config.HTTPParsingActionInclude,
+			want:          []string{"shop.example.com"},
+		},
+		{
+			name:          "obfuscate rule",
+			defaultAction: config.HTTPParsingActionExclude,
+			ruleAction:    config.HTTPParsingActionObfuscate,
+			want:          []string{"***"},
+		},
+		{
+			name:          "default exclude hides it",
+			defaultAction: config.HTTPParsingActionExclude,
+		},
+		{
+			name:          "exclude rule beats default include",
+			defaultAction: config.HTTPParsingActionInclude,
+			ruleAction:    config.HTTPParsingActionExclude,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			span := &request.Span{Method: "GET", Path: "/cart"}
+			req, resp := makeReqResp(map[string]string{"X-Request-Id": "abc123"}, nil)
+			req.Host = "shop.example.com"
+
+			ok := NewHTTPEnricher(hostHeaderConfig(tc.defaultAction, tc.ruleAction)).Enrich(span, req, resp)
+
+			if tc.want == nil {
+				assert.NotContains(t, span.RequestHeaders, "Host")
+			} else {
+				require.True(t, ok)
+				assert.Equal(t, tc.want, span.RequestHeaders["Host"])
+			}
+			assert.Empty(t, req.Header.Values("Host"), "the request headers must not be modified")
+			assert.Equal(t, "abc123", req.Header.Get("X-Request-Id"))
+		})
+	}
+}
+
+func TestGenericParsingSpan_HostHeaderKeepsExplicitValue(t *testing.T) {
+	span := &request.Span{Method: "GET", Path: "/cart"}
+	req, resp := makeReqResp(map[string]string{"Host": "header.example.com"}, nil)
+	req.Host = "shop.example.com"
+
+	cfg := hostHeaderConfig(config.HTTPParsingActionExclude, config.HTTPParsingActionInclude)
+	require.True(t, NewHTTPEnricher(cfg).Enrich(span, req, resp))
+	assert.Equal(t, []string{"header.example.com"}, span.RequestHeaders["Host"])
+}
+
+func TestGenericParsingSpan_HostHeaderIgnoredOnResponseScope(t *testing.T) {
+	span := &request.Span{Method: "GET", Path: "/cart"}
+	req, resp := makeReqResp(nil, nil)
+	req.Host = "shop.example.com"
+
+	cfg := hostHeaderConfig(config.HTTPParsingActionExclude, config.HTTPParsingActionInclude)
+	cfg.Rules[0].Scope = config.HTTPParsingScopeResponse
+	assert.False(t, NewHTTPEnricher(cfg).Enrich(span, req, resp))
+}
