@@ -22,6 +22,10 @@ import (
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 )
 
+// GoOffsets is the argument type of Tracer.RegisterOffsets. The alias lets tracers outside OBI
+// (see discover.RegisterTracers) implement the Tracer interface.
+type GoOffsets = goexec.Offsets
+
 type Instrumentable struct {
 	Type                 svc.InstrumentableType
 	InstrumentationError error
