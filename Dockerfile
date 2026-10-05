@@ -53,6 +53,8 @@ RUN gradle build -x buildNativeLib-amd64 -x buildNativeLib-aarch64 --no-daemon
 # Build the autoinstrumenter binary
 FROM ghcr.io/open-telemetry/obi-generator:${TAG} AS builder
 
+# Binary under cmd/ to build; the image runs it as /obi
+ARG CMD=obi
 ARG TARGETARCH
 ARG RELEASE_VERSION=unset
 ARG RELEASE_REVISION=unset
@@ -80,7 +82,7 @@ COPY --from=javaagent-builder /build/build/obi-java-agent.jar /src/pkg/internal/
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg \
 	/generate.sh \
-	&& make compile RELEASE_VERSION=${RELEASE_VERSION} RELEASE_REVISION=${RELEASE_REVISION}
+	&& make compile CMD=${CMD} RELEASE_VERSION=${RELEASE_VERSION} RELEASE_REVISION=${RELEASE_REVISION}
 
 # Create final image from minimal + built binary
 FROM scratch
@@ -89,7 +91,8 @@ LABEL maintainer="The OpenTelemetry Authors"
 
 WORKDIR /
 
-COPY --from=builder /src/bin/obi .
+ARG CMD=obi
+COPY --from=builder /src/bin/${CMD} ./obi
 COPY LICENSE NOTICE ./
 COPY NOTICES ./NOTICES
 
