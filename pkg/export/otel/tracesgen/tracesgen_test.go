@@ -1568,6 +1568,65 @@ func TestEmptyMessagingClientID(t *testing.T) {
 	}
 }
 
+// A Kafka span recorded by the broker sees the client as its peer, so it
+// reports it as client.address like the other server spans. A client span
+// keeps reporting the broker through server.address and service.peer.name.
+func TestKafkaServerSpanReportsClientAddress(t *testing.T) {
+	newSpan := func(event request.EventType) *request.Span {
+		return &request.Span{
+			Type:      event,
+			Method:    request.MessagingProcess,
+			Path:      "orders",
+			Statement: "shared-client-id",
+			Host:      "10.0.0.5",
+			HostName:  "kafka-0",
+			HostPort:  9092,
+			Peer:      "10.0.1.7",
+			PeerName:  "cart-worker",
+		}
+	}
+	optionalAttrs := map[attr.Name]struct{}{attr.ServicePeerName: {}}
+
+	t.Run("server", func(t *testing.T) {
+		attrs := AttrsToMap(TraceAttributesSelector(newSpan(request.EventTypeKafkaServer), optionalAttrs))
+
+		v, ok := attrs.Get(string(attr.ClientAddr))
+		require.True(t, ok)
+		assert.Equal(t, "cart-worker", v.AsString())
+	})
+
+	t.Run("server falls back to the peer address", func(t *testing.T) {
+		span := newSpan(request.EventTypeKafkaServer)
+		span.PeerName = ""
+
+		attrs := AttrsToMap(TraceAttributesSelector(span, optionalAttrs))
+
+		v, ok := attrs.Get(string(attr.ClientAddr))
+		require.True(t, ok)
+		assert.Equal(t, "10.0.1.7", v.AsString())
+	})
+
+	t.Run("server without a peer", func(t *testing.T) {
+		span := newSpan(request.EventTypeKafkaServer)
+		span.Peer, span.PeerName = "", ""
+
+		attrs := AttrsToMap(TraceAttributesSelector(span, optionalAttrs))
+
+		_, ok := attrs.Get(string(attr.ClientAddr))
+		assert.False(t, ok)
+	})
+
+	t.Run("client", func(t *testing.T) {
+		attrs := AttrsToMap(TraceAttributesSelector(newSpan(request.EventTypeKafkaClient), optionalAttrs))
+
+		_, ok := attrs.Get(string(attr.ClientAddr))
+		assert.False(t, ok)
+		v, ok := attrs.Get(string(semconv.ServicePeerNameKey))
+		require.True(t, ok)
+		assert.Equal(t, "kafka-0", v.AsString())
+	})
+}
+
 // The response model falls back to the request model, which is itself reported
 // only when the parser recovered one, so neither is emitted when both are empty.
 func TestGenAIResponseModelFallbackIsGuarded(t *testing.T) {
