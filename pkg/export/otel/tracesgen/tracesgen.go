@@ -1513,6 +1513,10 @@ func traceAttributesSelectorInternal(span *request.Span, optionalAttrs map[attr.
 
 		if span.Type == request.EventTypeKafkaClient {
 			attrs = appendPeerService(attrs, span, optionalAttrs)
+		} else {
+			// The broker side sees the connecting client as its peer, and the
+			// client id alone does not tell the workloads apart.
+			attrs = appendIfSet(attrs, request.ClientAddr, request.PeerAsClient(span))
 		}
 
 		if span.MessagingInfo != nil {
