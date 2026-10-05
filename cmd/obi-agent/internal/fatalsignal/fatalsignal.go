@@ -34,7 +34,7 @@ import (
 
 //go:generate $BPF2GO -cc $BPF_CLANG -cflags $BPF_CFLAGS -type fatal_signal_event_t -target amd64,arm64 Bpf fatalsignal.c -- -I../../../../bpf
 
-// Tracer is an obiebpf.Tracer with one tracepoint and one ring buffer.
+// Tracer is an obiebpf.Tracer with one BTF tracepoint and one ring buffer.
 type Tracer struct {
 	cfg        *obi.Config
 	metrics    imetrics.Reporter
@@ -59,10 +59,10 @@ func (p *Tracer) LoadSpecs() ([]*ebpfcommon.SpecBundle, error) {
 	return []*ebpfcommon.SpecBundle{{Spec: spec, Objects: &p.bpfObjects}}, nil
 }
 
-func (p *Tracer) Tracepoints() map[string]ebpfcommon.ProbeDesc {
-	return map[string]ebpfcommon.ProbeDesc{
-		"signal/signal_deliver": {Required: true, Start: p.bpfObjects.ObiTpSignalDeliver},
-	}
+// Tracing attaches the BTF tracepoint with a BPF link: a classic tracepoint would need tracefs mounted
+// in the container.
+func (p *Tracer) Tracing() []*ebpfcommon.Tracing {
+	return []*ebpfcommon.Tracing{{Program: p.bpfObjects.ObiTpBtfSignalDeliver, AttachAs: ebpf.AttachTraceRawTp}}
 }
 
 func (p *Tracer) Run(ctx context.Context, eventCtx *ebpfcommon.EBPFEventContext, out *msg.Queue[[]request.Span]) {
@@ -157,7 +157,7 @@ func (p *Tracer) SocketFilters() []*ebpf.Program                         { retur
 func (p *Tracer) SockMsgs() []ebpfcommon.SockMsg                         { return nil }
 func (p *Tracer) SockOps() []ebpfcommon.SockOps                          { return nil }
 func (p *Tracer) Iters() []*ebpfcommon.Iter                              { return nil }
-func (p *Tracer) Tracing() []*ebpfcommon.Tracing                         { return nil }
+func (p *Tracer) Tracepoints() map[string]ebpfcommon.ProbeDesc           { return nil }
 func (p *Tracer) RecordInstrumentedLib(uint64, []io.Closer)              {}
 func (p *Tracer) AddInstrumentedLibRef(uint64)                           {}
 func (p *Tracer) AlreadyInstrumentedLib(uint64) bool                     { return false }
