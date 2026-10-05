@@ -8,7 +8,9 @@
 // Signals that the process handles itself (for example SIGSEGV in a JVM or a Go runtime) are not reported.
 
 #include <bpfcore/vmlinux.h>
+#include <bpfcore/bpf_core_read.h>
 #include <bpfcore/bpf_helpers.h>
+#include <bpfcore/bpf_tracing.h>
 
 #include <common/pin_internal.h>
 
@@ -50,11 +52,12 @@ static __always_inline bool is_fatal(const int sig) {
     }
 }
 
-// runs in the context of the task that receives the signal
-SEC("tracepoint/signal/signal_deliver")
-int obi_tp_signal_deliver(struct trace_event_raw_signal_deliver *ctx) {
-    const int sig = ctx->sig;
-    if (!is_fatal(sig) || ctx->sa_handler != k_sig_dfl) {
+// BTF tracepoint: attached with a BPF link, so it needs no tracefs or debugfs mount in the container.
+// Runs in the context of the task that receives the signal. info is NULL (SEND_SIG_NOINFO) when a
+// group exit forces SIGKILL, so it is read with BPF_CORE_READ.
+SEC("tp_btf/signal_deliver")
+int BPF_PROG(obi_tp_btf_signal_deliver, int sig, struct kernel_siginfo *info, struct k_sigaction *ka) {
+    if (!is_fatal(sig) || (unsigned long)BPF_CORE_READ(ka, sa.sa_handler) != k_sig_dfl) {
         return 0;
     }
 
@@ -65,7 +68,7 @@ int obi_tp_signal_deliver(struct trace_event_raw_signal_deliver *ctx) {
     event->timestamp = bpf_ktime_get_ns();
     task_pid(&event->pid);
     event->sig = sig;
-    event->code = ctx->code;
+    event->code = BPF_CORE_READ(info, si_code);
     bpf_get_current_comm(event->comm, sizeof(event->comm));
     bpf_ringbuf_submit(event, 0);
     return 0;
