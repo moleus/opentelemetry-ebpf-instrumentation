@@ -201,6 +201,8 @@ func newCommonTracersGroup(cfg *obi.Config, metrics imetrics.Reporter, pidFilter
 		tracers = append(tracers, gpuevent.New(pidFilter, cfg, metrics))
 	}
 
+	tracers = append(tracers, newRegisteredTracers(cfg, metrics, pidFilter)...)
+
 	return tracers
 }
 
