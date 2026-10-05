@@ -40,3 +40,13 @@ func OverrideAppExportQueue(q *msg.Queue[[]request.Span]) Option {
 		info.OverrideAppExportQueue = q
 	}
 }
+
+// WithTraceDecider passes a function that decides, for every application span, whether it is
+// exported as a trace. A refused span is still counted by the span metrics. The function can read
+// its rules from shared state (for example an atomic.Pointer), so the trace selection can change
+// while OBI runs, without a restart and without reloading the eBPF programs.
+func WithTraceDecider(decider global.TraceDecider) Option {
+	return func(info *global.ContextInfo) {
+		info.TraceDecider = decider
+	}
+}
