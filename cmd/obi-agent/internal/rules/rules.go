@@ -44,9 +44,12 @@ type Rule struct {
 	Match Match  `yaml:"match"`
 	// Action fields are inline: ratio, errors.
 	Action `yaml:",inline"`
-	// Until is the end of the rule. After it, the rule is ignored. Required when the rule exports
-	// more than the default (a higher ratio, or errors that the default does not export).
+	// Until is the end of the rule. After it, the rule is ignored. A rule that exports more than the
+	// default (a higher ratio, or errors that the default does not export) needs Until or SpansPerSecond.
 	Until *time.Time `yaml:"until"`
+	// SpansPerSecond limits the spans that this rule exports (0 = no own limit). A rule with a limit
+	// can stay without Until: for rare events, such as crashes.
+	SpansPerSecond float64 `yaml:"spans_per_second"`
 }
 
 // Match is a set of glob patterns (gobwas/glob syntax: *, ?, {a,b}). An empty pattern matches all.
@@ -55,6 +58,7 @@ type Match struct {
 	Workload  string `yaml:"workload"`  // k8s.owner.name: deployment, statefulset, daemonset...
 	Service   string `yaml:"service"`   // service.name
 	Kind      string `yaml:"kind"`      // server, client, producer, consumer, internal
+	Name      string `yaml:"name"`      // span name, for example "GET /api/*" or "SIG*"
 }
 
 // Limits protect the node and the backend.
@@ -77,18 +81,18 @@ type Set struct {
 // CompiledRule is a Rule with compiled patterns.
 type CompiledRule struct {
 	Rule
-	namespace, workload, service, kind glob.Glob
+	namespace, workload, service, kind, name glob.Glob
 }
 
 // Attrs are the span attributes that the rules match.
 type Attrs struct {
-	Namespace, Workload, Service, Kind string
+	Namespace, Workload, Service, Kind, Name string
 }
 
 // Matches tells whether the rule selects the span attributes.
 func (r *CompiledRule) Matches(a *Attrs) bool {
 	return matches(r.namespace, a.Namespace) && matches(r.workload, a.Workload) &&
-		matches(r.service, a.Service) && matches(r.kind, a.Kind)
+		matches(r.service, a.Service) && matches(r.kind, a.Kind) && matches(r.name, a.Name)
 }
 
 // ActiveAt tells whether the rule applies at the time.
@@ -141,9 +145,11 @@ func Compile(f *File, now time.Time) (*Set, error) {
 		}
 		exportsMore := r.Ratio > f.Default.Ratio || (r.Errors && !f.Default.Errors)
 		switch {
-		case exportsMore && r.Until == nil:
-			errs = append(errs, fmt.Errorf("%s: exports more than the default, so it needs 'until'", id))
-		case exportsMore && r.Until.Sub(now) > maxDuration:
+		case r.SpansPerSecond < 0:
+			errs = append(errs, fmt.Errorf("%s: spans_per_second must not be negative", id))
+		case exportsMore && r.Until == nil && r.SpansPerSecond == 0:
+			errs = append(errs, fmt.Errorf("%s: exports more than the default, so it needs 'until' or 'spans_per_second'", id))
+		case exportsMore && r.Until != nil && r.Until.Sub(now) > maxDuration:
 			errs = append(errs, fmt.Errorf("%s: 'until' is more than %s from now", id, maxDuration))
 		}
 		cr := CompiledRule{Rule: r}
@@ -159,6 +165,9 @@ func Compile(f *File, now time.Time) (*Set, error) {
 		}
 		if cr.kind, err = compile(strings.ToLower(r.Match.Kind)); err != nil {
 			errs = append(errs, fmt.Errorf("%s: kind: %w", id, err))
+		}
+		if cr.name, err = compile(r.Match.Name); err != nil {
+			errs = append(errs, fmt.Errorf("%s: name: %w", id, err))
 		}
 		set.Rules = append(set.Rules, cr)
 	}

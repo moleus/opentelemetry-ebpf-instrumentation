@@ -16,6 +16,8 @@ func (l *limiter) allow(now time.Time, perSecond, burst float64) bool {
 	if perSecond <= 0 {
 		return true
 	}
+	// a rate below 1/s still lets one span through
+	burst = max(burst, 1)
 	if l.last.IsZero() {
 		l.tokens = burst
 	} else {
