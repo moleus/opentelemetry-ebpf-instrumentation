@@ -769,8 +769,17 @@ func (i *instrumenter) instrumentUprobeModule(
 ) ([]io.Closer, bool) {
 	var moduleClosers []io.Closer
 	instrumented := false
+	// The symbol tables of the module are read once for all groups of probes, see moduleSymbols.
+	symbols, symbolsErr := openModuleSymbols(module.instrPath, module.probes)
+	if symbolsErr == nil {
+		defer symbols.close()
+	}
 	for _, probes := range module.probes {
-		if err := gatherOffsets(module.instrPath, probes, log); err != nil {
+		err := symbolsErr
+		if err == nil {
+			err = symbols.gatherOffsets(probes, module.instrPath, log)
+		}
+		if err != nil {
 			log.Debug("error gathering offsets", "error", err)
 			continue
 		}
@@ -1223,29 +1232,75 @@ func symbolNames(m map[string][]*ebpfcommon.ProbeDesc, matcher ebpfcommon.Symbol
 	return keys
 }
 
-func gatherOffsets(instrPath string, probes map[string][]*ebpfcommon.ProbeDesc, log *slog.Logger) error {
+// moduleSymbols are the symbols that the probes of a module ask for, found with one pass over
+// the symbol tables of the module file.
+type moduleSymbols struct {
+	elfFile *elf.File
+	exact   map[string]procs.Sym
+	substr  map[string]procs.Sym
+}
+
+// openModuleSymbols opens the file and looks up the symbols of all groups of probes at once.
+// A binary of a database server has hundreds of thousands of symbols, and a module has a group of
+// probes for each tracer that attaches to it: a pass for each group took seconds of CPU time.
+func openModuleSymbols(instrPath string, groups []map[string][]*ebpfcommon.ProbeDesc) (*moduleSymbols, error) {
 	elfFile, err := elf.Open(instrPath)
 	if err != nil {
-		return fmt.Errorf("failed to open elf file %s: %w", instrPath, err)
+		return nil, fmt.Errorf("failed to open elf file %s: %w", instrPath, err)
 	}
 
-	defer elfFile.Close()
+	exact, substr, err := findProbeSymbols(elfFile, groups, instrPath)
+	if err != nil {
+		_ = elfFile.Close()
+		return nil, err
+	}
 
-	return gatherOffsetsImpl(elfFile, probes, instrPath, log)
+	return &moduleSymbols{elfFile: elfFile, exact: exact, substr: substr}, nil
+}
+
+func (m *moduleSymbols) close() {
+	_ = m.elfFile.Close()
+}
+
+func (m *moduleSymbols) gatherOffsets(probes map[string][]*ebpfcommon.ProbeDesc, instrPath string, log *slog.Logger) error {
+	return applyProbeSymbols(m.exact, m.substr, probes, instrPath, log)
+}
+
+// findProbeSymbols looks up, with one pass over the symbol tables, the symbols of all groups of probes.
+// The result for a name does not depend on the other names, so the union of the names of the groups
+// gives each group the same symbols as a lookup of its own names.
+func findProbeSymbols(elfFile *elf.File, groups []map[string][]*ebpfcommon.ProbeDesc, instrPath string) (map[string]procs.Sym, map[string]procs.Sym, error) {
+	var exactNames, substrNames []string
+	for _, probes := range groups {
+		exactNames = append(exactNames, symbolNames(probes, ebpfcommon.SymbolMatcherExact)...)
+		substrNames = append(substrNames, symbolNames(probes, ebpfcommon.SymbolMatcherContains)...)
+	}
+	exact, substr, err := procs.FindExeSymbolsByNameAndSubstring(
+		elfFile,
+		slices.Compact(slices.Sorted(slices.Values(exactNames))),
+		slices.Compact(slices.Sorted(slices.Values(substrNames))),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to lookup symbols for %s: %w", instrPath, err)
+	}
+	return exact, substr, nil
 }
 
 func gatherOffsetsImpl(elfFile *elf.File, probes map[string][]*ebpfcommon.ProbeDesc,
 	instrPath string, log *slog.Logger,
 ) error {
-	exactSyms, substringSyms, err := procs.FindExeSymbolsByNameAndSubstring(
-		elfFile,
-		symbolNames(probes, ebpfcommon.SymbolMatcherExact),
-		symbolNames(probes, ebpfcommon.SymbolMatcherContains),
-	)
+	exactSyms, substringSyms, err := findProbeSymbols(elfFile, []map[string][]*ebpfcommon.ProbeDesc{probes}, instrPath)
 	if err != nil {
-		return fmt.Errorf("failed to lookup symbols for %s: %w", instrPath, err)
+		return err
 	}
 
+	return applyProbeSymbols(exactSyms, substringSyms, probes, instrPath, log)
+}
+
+// applyProbeSymbols sets the offsets of the probes of a group from the symbols that were found.
+func applyProbeSymbols(exactSyms, substringSyms map[string]procs.Sym, probes map[string][]*ebpfcommon.ProbeDesc,
+	instrPath string, log *slog.Logger,
+) error {
 	for symbolName, probeArray := range probes {
 		for _, probe := range probeArray {
 			syms := exactSyms
