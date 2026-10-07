@@ -109,13 +109,14 @@ type symbolCollector struct {
 	// that is read from the file without making a string of every name of the table.
 	names   []string
 	nameBuf [][]byte
-	matches func(symbol []byte, names []string, nameBuf [][]byte) (string, bool)
+	// matches appends to hits the index of each of the names that the symbol matches.
+	matches func(symbol []byte, names []string, nameBuf [][]byte, hits []int) []int
 }
 
 func newSymbolCollector(
 	addresses map[string]Sym,
 	names []string,
-	matches func([]byte, []string, [][]byte) (string, bool),
+	matches func([]byte, []string, [][]byte, []int) []int,
 ) symbolCollector {
 	nameBuf := make([][]byte, len(names))
 	for i, n := range names {
@@ -130,6 +131,7 @@ func collectSymbols(f *elf.File, tableType elf.SectionType, collectors []symbolC
 	if len(types) == 0 {
 		types = []elf.SymType{elf.STT_FUNC}
 	}
+	var hits []int
 	err := forEachELFSymbol(f, tableType, func(s *elfSymbol) {
 		if !slices.Contains(types, elf.ST_TYPE(s.Info)) {
 			return
@@ -142,21 +144,19 @@ func collectSymbols(f *elf.File, tableType elf.SectionType, collectors []symbolC
 
 		var sym *Sym
 		for _, collector := range collectors {
-			key, ok := collector.matches(name, collector.names, collector.nameBuf)
-			if !ok {
-				continue
+			hits = collector.matches(name, collector.names, collector.nameBuf, hits[:0])
+			for _, hit := range hits {
+				if sym == nil {
+					resolvedSym := resolveSymbol(f, elf.Symbol{
+						Name:  string(name),
+						Info:  s.Info,
+						Value: s.Value,
+						Size:  s.Size,
+					})
+					sym = &resolvedSym
+				}
+				collector.addresses[collector.names[hit]] = *sym
 			}
-
-			if sym == nil {
-				resolvedSym := resolveSymbol(f, elf.Symbol{
-					Name:  string(name),
-					Info:  s.Info,
-					Value: s.Value,
-					Size:  s.Size,
-				})
-				sym = &resolvedSym
-			}
-			collector.addresses[key] = *sym
 		}
 	})
 	if errors.Is(err, elf.ErrNoSymbols) {
@@ -218,22 +218,24 @@ func resolveSymbol(f *elf.File, s elf.Symbol) Sym {
 	return Sym{Name: s.Name, Off: address, Value: s.Value, Len: s.Size, Prog: p}
 }
 
-func exactSymbolMatch(symbolName []byte, names []string, _ [][]byte) (string, bool) {
-	for _, n := range names {
+func exactSymbolMatch(symbolName []byte, names []string, _ [][]byte, hits []int) []int {
+	for i, n := range names {
 		if string(symbolName) == n {
-			return n, true
+			return append(hits, i)
 		}
 	}
-	return "", false
+	return hits
 }
 
-func substringSymbolMatch(symbolName []byte, substrings []string, substringBytes [][]byte) (string, bool) {
+// substringSymbolMatch reports every substring that the name contains, so that the result for
+// a substring does not depend on the other substrings that are looked up with it.
+func substringSymbolMatch(symbolName []byte, _ []string, substringBytes [][]byte, hits []int) []int {
 	for i, substring := range substringBytes {
 		if bytes.Contains(symbolName, substring) {
-			return substrings[i], true
+			hits = append(hits, i)
 		}
 	}
-	return "", false
+	return hits
 }
 
 func matchExeSymbols(ctx *fastelf.ElfContext) svc.InstrumentableType {

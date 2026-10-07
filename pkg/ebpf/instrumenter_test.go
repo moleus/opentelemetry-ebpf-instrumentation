@@ -1546,3 +1546,52 @@ func TestMakeOtelBPFFSPathRejectsInaccessibleExistingDirectory(t *testing.T) {
 
 	require.ErrorContains(t, err, "accessing bpffs otel path")
 }
+
+// All groups of probes of a module are resolved by one lookup. Each group must get what a lookup
+// of its own names gives, also when two groups ask for overlapping substrings.
+func TestFindProbeSymbolsOneLookupForManyGroups(t *testing.T) {
+	elfFile, err := elf.NewFile(bytes.NewReader(testData()))
+	require.NoError(t, err)
+	defer elfFile.Close()
+
+	newGroups := func() []probeDescMap {
+		groupA := makeProbeDescMap(expectedValues())
+		groupB := probeDescMap{
+			"setprog":        {{SymbolMatcher: ebpfcommon.SymbolMatcherContains}},
+			"setprogname":    {{SymbolMatcher: ebpfcommon.SymbolMatcherExact}},
+			"no_such_symbol": {{}},
+		}
+		groupC := probeDescMap{
+			"progname": {{SymbolMatcher: ebpfcommon.SymbolMatcherContains}},
+			"setprog":  {{SymbolMatcher: ebpfcommon.SymbolMatcherContains}},
+		}
+		return []probeDescMap{groupA, groupB, groupC}
+	}
+
+	// reference: a lookup for each group
+	separate := newGroups()
+	var separateErrs []error
+	for _, g := range separate {
+		separateErrs = append(separateErrs, gatherOffsetsImpl(elfFile, g, "libbsd.so", slog.Default()))
+	}
+
+	// one lookup for all groups
+	together := newGroups()
+	var all []map[string][]*ebpfcommon.ProbeDesc
+	for _, g := range together {
+		all = append(all, g)
+	}
+	exact, substr, err := findProbeSymbols(elfFile, all, "libbsd.so")
+	require.NoError(t, err)
+	for i, g := range together {
+		assert.Equal(t, separateErrs[i], applyProbeSymbols(exact, substr, g, "libbsd.so", slog.Default()), "group %d", i)
+		for name, descs := range g {
+			for j, d := range descs {
+				ref := separate[i][name][j]
+				assert.Equal(t, ref.StartOffset, d.StartOffset, "group %d %s", i, name)
+				assert.Equal(t, ref.ReturnOffsets, d.ReturnOffsets, "group %d %s", i, name)
+				assert.Equal(t, ref.Skip, d.Skip, "group %d %s", i, name)
+			}
+		}
+	}
+}
