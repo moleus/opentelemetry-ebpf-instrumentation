@@ -128,10 +128,19 @@ func isResizableMapType(t ebpf.MapType) bool {
 	}
 }
 
+// isRingBuf returns true for the ring buffer map types.
+func isRingBuf(t ebpf.MapType) bool {
+	return t == ebpf.RingBuf || t == ebpf.UserRingbuf
+}
+
 // SetupMapSizes scales all resizable maps in the spec by globalScaleFactor.
 // If globalScaleFactor > 0, sizes are doubled that many times (left shift).
 // If globalScaleFactor < 0, sizes are halved that many times (right shift).
 // Maps with PinByName are skipped regardless of scale factor.
+// Ring buffers only grow: a hash map that is too small evicts its oldest entry,
+// but a ring buffer that is too small drops the events of a burst, and the
+// spans with them. They hold events in transit, not state per request, so a
+// shrunk ring buffer saves little memory and loses data.
 func SetupMapSizes(spec *ebpf.CollectionSpec, globalScaleFactor int) {
 	if globalScaleFactor == 0 {
 		return
@@ -139,6 +148,10 @@ func SetupMapSizes(spec *ebpf.CollectionSpec, globalScaleFactor int) {
 
 	for _, mSpec := range spec.Maps {
 		if !isResizableMapType(mSpec.Type) {
+			continue
+		}
+
+		if globalScaleFactor < 0 && isRingBuf(mSpec.Type) {
 			continue
 		}
 
