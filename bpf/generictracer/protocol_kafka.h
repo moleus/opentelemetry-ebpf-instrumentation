@@ -81,7 +81,12 @@ enum {
     k_kafka_min_response_message_size_value = 4, // correlation_id (4)
 
     // https://kafka.apache.org/protocol#protocol_api_keys
+    k_kafka_api_key_produce = 0,
     k_kafka_api_key_metadata = 3,
+    // latest Produce version known to the userspace parser
+    k_kafka_max_produce_api_version = 13,
+    // same limit as KafkaMaxPayloadLen in the userspace parser
+    k_kafka_max_payload_len = 20 * 1024 * 1024,
     // only versions 10-13 contain topic_id which we are interested in
     k_kafka_min_metadata_api_version = 10,
     k_kafka_max_metadata_api_version = 13,
