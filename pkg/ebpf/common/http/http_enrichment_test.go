@@ -1607,3 +1607,39 @@ func TestGenericParsingSpan_HostHeaderIgnoredOnResponseScope(t *testing.T) {
 	cfg.Rules[0].Scope = config.HTTPParsingScopeResponse
 	assert.False(t, NewHTTPEnricher(cfg).Enrich(span, req, resp))
 }
+
+func TestEnrichRequest_RequestScopeOnly(t *testing.T) {
+	cfg := config.EnrichmentConfig{
+		Enabled: true,
+		Policy: config.HTTPParsingPolicy{
+			DefaultAction: config.HTTPParsingDefaultAction{
+				Headers: config.HTTPParsingActionExclude,
+				Body:    config.HTTPParsingActionExclude,
+			},
+			DefaultObfuscationString: "*",
+		},
+		Rules: []config.HTTPParsingRule{
+			{
+				Action: config.HTTPParsingActionInclude,
+				Type:   config.HTTPParsingRuleTypeHeaders,
+				Scope:  config.HTTPParsingScopeAll,
+				Match:  config.HTTPParsingMatch{Patterns: []services.GlobAttr{gi("X-Request-Id"), gi("Host")}},
+			},
+		},
+	}
+	span := &request.Span{Method: "GET", Path: "/test"}
+	req, _ := makeReqResp(map[string]string{"X-Request-Id": "abc123", "Accept": "*/*"}, nil)
+	req.Host = "example.test"
+
+	require.True(t, NewHTTPEnricher(cfg).EnrichRequest(span, req))
+	assert.Equal(t, []string{"abc123"}, span.RequestHeaders["X-Request-Id"])
+	assert.Equal(t, []string{"example.test"}, span.RequestHeaders["Host"])
+	_, hasAccept := span.RequestHeaders["Accept"]
+	assert.False(t, hasAccept)
+	assert.Nil(t, span.ResponseHeaders)
+
+	empty := &request.Span{}
+	req2, _ := makeReqResp(map[string]string{"Accept": "*/*"}, nil)
+	assert.False(t, NewHTTPEnricher(cfg).EnrichRequest(empty, req2))
+	assert.Nil(t, empty.RequestHeaders)
+}
