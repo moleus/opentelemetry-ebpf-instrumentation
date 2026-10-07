@@ -246,6 +246,31 @@ static __always_inline bool is_unix_sock_server(u8 direction, u16 orig_dport) {
     return (direction == TCP_RECV && orig_dport == 0);
 }
 
+// A Kafka Produce request with acks=0 gets no response, so the request/response
+// pairing below never completes for it: every later request of the connection
+// would only be appended to the first one and no span would be emitted until the
+// socket closes. When the pending request is exactly one complete Produce request
+// (message_size + 4 == bytes seen), any further data in the same direction is the
+// next request: the pending one is final.
+static __always_inline u32 kafka_be32(const unsigned char *b) {
+    return ((u32)b[0] << 24) | ((u32)b[1] << 16) | ((u32)b[2] << 8) | (u32)b[3];
+}
+
+static __always_inline bool kafka_complete_produce_request(const tcp_req_t *req) {
+    if (req->end_monotime_ns != 0 || req->len < k_kafka_min_request_header_size) {
+        return false;
+    }
+    const u32 message_size = kafka_be32(&req->buf[0]);
+    const u32 api_key = ((u32)req->buf[4] << 8) | (u32)req->buf[5];
+    const u32 api_version = ((u32)req->buf[6] << 8) | (u32)req->buf[7];
+    const u32 correlation_id = kafka_be32(&req->buf[8]);
+    return api_key == k_kafka_api_key_produce && api_version <= k_kafka_max_produce_api_version &&
+           correlation_id < 0x80000000 &&
+           message_size >= k_kafka_request_header_fields_without_message_size + 2 &&
+           message_size <= k_kafka_max_payload_len &&
+           req->req_len == message_size + k_kafka_hdr_message_size;
+}
+
 static __always_inline void handle_unknown_tcp_connection(pid_connection_info_t *pid_conn,
                                                           void *u_buf,
                                                           int bytes_len,
@@ -260,6 +285,16 @@ static __always_inline void handle_unknown_tcp_connection(pid_connection_info_t 
     const u32 netns = task_netns();
     if (existing) {
         if (existing->direction == direction && existing->end_monotime_ns != 0) {
+            bpf_map_delete_elem(&ongoing_tcp_req, pid_conn);
+            existing = 0;
+        } else if (existing->direction == direction && kafka_complete_produce_request(existing)) {
+            // Produce with acks=0: no response will come, the request is final.
+            // There is no response to time, so the span has zero length.
+            bpf_dbg_printk("Kafka produce without response, sending the pending request");
+            existing->end_monotime_ns = existing->start_monotime_ns;
+            existing->resp_len = 0;
+            bpf_ringbuf_output(&events, existing, sizeof(*existing), get_flags());
+            cleanup_trace_info(existing, pid_conn);
             bpf_map_delete_elem(&ongoing_tcp_req, pid_conn);
             existing = 0;
         }
