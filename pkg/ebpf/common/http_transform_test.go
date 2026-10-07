@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
 	"go.opentelemetry.io/obi/pkg/appolly/app/svc"
+	"go.opentelemetry.io/obi/pkg/appolly/services"
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/ebpf/ringbuf"
 	"go.opentelemetry.io/obi/pkg/internal/largebuf"
@@ -806,4 +807,106 @@ func TestHttpSafeParseResponseNonChunked(t *testing.T) {
 	got, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Equal(t, body, string(got))
+}
+
+func enrichmentTestConfig() config.EBPFTracer {
+	return config.EBPFTracer{
+		PayloadExtraction: config.PayloadExtraction{
+			HTTP: config.HTTPConfig{
+				Enrichment: config.EnrichmentConfig{
+					Enabled: true,
+					Policy: config.HTTPParsingPolicy{
+						DefaultAction: config.HTTPParsingDefaultAction{
+							Headers: config.HTTPParsingActionExclude,
+							Body:    config.HTTPParsingActionExclude,
+						},
+						DefaultObfuscationString: "*",
+					},
+					Rules: []config.HTTPParsingRule{
+						{
+							Action: config.HTTPParsingActionInclude,
+							Type:   config.HTTPParsingRuleTypeHeaders,
+							Scope:  config.HTTPParsingScopeAll,
+							Match: config.HTTPParsingMatch{
+								Patterns: []services.GlobAttr{services.NewGlob("host"), services.NewGlob("x-request-id")},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// The response large buffer can be lost (ring buffer overflow, LRU eviction):
+// the span must keep the request headers selected by the enrichment rules.
+func TestHTTPInfoEventToSpan_EnrichesRequestWithoutResponse(t *testing.T) {
+	const reqHead = "POST /v3/subscribe HTTP/1.1\r\nHost: configs.example.test\r\nX-Request-Id: r1\r\nUser-Agent: x\r\nContent-Length: 600\r\n\r\n{\"k\":"
+	connInfo := BpfConnectionInfoT{D_port: 80}
+	traceID := [16]uint8{'t', 'r', 'a', 'c', 'e', 1}
+
+	tests := []struct {
+		name         string
+		largeRequest bool // the request large buffer is present
+		largeResp    string
+		wantHeaders  bool
+	}{
+		{name: "response buffer missing, request buffer present", largeRequest: true, wantHeaders: true},
+		{name: "both buffers missing, primary buffer used", wantHeaders: true},
+		{name: "response does not parse", largeRequest: true, largeResp: "garbage\x00\x01", wantHeaders: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := enrichmentTestConfig()
+			pctx := NewEBPFParseContext(&cfg, nil, nil)
+			require.NotNil(t, pctx.httpEnricher)
+
+			var event BPFHTTPInfo
+			event.Type = uint8(request.EventTypeHTTP)
+			event.Status = 200
+			event.HasLargeBuffers = 1
+			event.ConnInfo = connInfo
+			event.Tp.TraceId = traceID
+			copy(event.Buf[:], reqHead)
+
+			add := func(packetType uint8, payload string) {
+				hdr := TCPLargeBufferHeader{PacketType: packetType, Len: uint32(len(payload)), Action: largeBufferActionInit, Kind: uint8(KindLayerApp)}
+				hdr.Tp.TraceId = traceID
+				hdr.ConnInfo = connInfo
+				_, _, err := appendTCPLargeBuffer(pctx, toRingbufRecord(t, hdr, payload))
+				require.NoError(t, err)
+			}
+			if tc.largeRequest {
+				add(packetTypeRequest, reqHead)
+			}
+			if tc.largeResp != "" {
+				add(packetTypeResponse, tc.largeResp)
+			}
+
+			span, ignored, err := HTTPInfoEventToSpan(pctx, &event)
+			require.NoError(t, err)
+			assert.False(t, ignored)
+			assert.Equal(t, "/v3/subscribe", span.Path)
+			assert.Equal(t, 200, span.Status)
+			assert.Equal(t, []string{"configs.example.test"}, span.RequestHeaders["Host"])
+			assert.Equal(t, []string{"r1"}, span.RequestHeaders["X-Request-Id"])
+			_, hasUA := span.RequestHeaders["User-Agent"]
+			assert.False(t, hasUA, "headers outside the rules stay excluded")
+		})
+	}
+}
+
+// Without enrichment the request-only path must not parse or add headers.
+func TestHTTPInfoEventToSpan_NoEnrichmentNoHeaders(t *testing.T) {
+	var event BPFHTTPInfo
+	event.Type = uint8(request.EventTypeHTTP)
+	event.Status = 200
+	copy(event.Buf[:], "GET /a HTTP/1.1\r\nHost: h\r\n\r\n")
+
+	cfg := config.EBPFTracer{}
+	span, _, err := HTTPInfoEventToSpan(NewEBPFParseContext(&cfg, nil, nil), &event)
+	require.NoError(t, err)
+	assert.Nil(t, span.RequestHeaders)
+	assert.Equal(t, "/a", span.Path)
 }
