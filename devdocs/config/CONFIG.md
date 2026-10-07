@@ -252,7 +252,7 @@ Per-protocol maximum bytes to capture per request per direction, sent to userspa
 
 | YAML Path | Type | Env Var | Default | Values | Deprecated | Description |
 |---|---|---|---|---|---|---|
-| `ebpf.maps_config.global_scale_factor` | `integer` |  | `0` |  |  | Scales map sizes in powers of two:   > 0: grows size (2x per step)   < 0: shrinks size (1/2 per step)   = 0: no change |
+| `ebpf.maps_config.global_scale_factor` | `integer` |  | `0` |  |  | Scales map sizes in powers of two:   > 0: grows size (2x per step)   < 0: shrinks size (1/2 per step)   = 0: no change Ring buffers grow with a positive value but never shrink. |
 
 ### `ebpf.payload_extraction`
 

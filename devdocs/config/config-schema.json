@@ -1917,7 +1917,7 @@
       "properties": {
         "global_scale_factor": {
           "type": "integer",
-          "description": "Scales map sizes in powers of two:   > 0: grows size (2x per step)   < 0: shrinks size (1/2 per step)   = 0: no change",
+          "description": "Scales map sizes in powers of two:   > 0: grows size (2x per step)   < 0: shrinks size (1/2 per step)   = 0: no change Ring buffers grow with a positive value but never shrink.",
           "default": 0
         }
       },
