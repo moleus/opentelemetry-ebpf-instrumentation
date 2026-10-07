@@ -236,3 +236,25 @@ func TestForEachELFSymbolNoTable(t *testing.T) {
 	err := forEachELFSymbol(f, elf.SHT_SYMTAB+100, func(*elfSymbol) { t.Fatal("no symbol expected") })
 	assert.ErrorIs(t, err, elf.ErrNoSymbols)
 }
+
+// The result for a substring must not depend on the other substrings of the same lookup, as
+// a lookup serves several groups of probes at once.
+func TestFindExeSymbolsOverlappingSubstrings(t *testing.T) {
+	f := openSelf(t)
+
+	_, subA, err := FindExeSymbolsByNameAndSubstring(f, nil, []string{"runtime.mallocgc"})
+	require.NoError(t, err)
+	_, subB, err := FindExeSymbolsByNameAndSubstring(f, nil, []string{"mallocgc"})
+	require.NoError(t, err)
+	_, both1, err := FindExeSymbolsByNameAndSubstring(f, nil, []string{"runtime.mallocgc", "mallocgc"})
+	require.NoError(t, err)
+	_, both2, err := FindExeSymbolsByNameAndSubstring(f, nil, []string{"mallocgc", "runtime.mallocgc"})
+	require.NoError(t, err)
+
+	require.NotEmpty(t, subA)
+	require.NotEmpty(t, subB)
+	for _, both := range []map[string]Sym{both1, both2} {
+		assert.Equal(t, subA["runtime.mallocgc"], both["runtime.mallocgc"])
+		assert.Equal(t, subB["mallocgc"], both["mallocgc"])
+	}
+}
