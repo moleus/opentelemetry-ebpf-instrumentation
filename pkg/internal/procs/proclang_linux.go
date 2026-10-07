@@ -4,13 +4,13 @@
 package procs // import "go.opentelemetry.io/obi/pkg/internal/procs"
 
 import (
+	"bytes"
 	"debug/elf"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"slices"
-	"strings"
 
 	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/app/svc"
@@ -103,39 +103,66 @@ func findLanguageFromElf(filePath string) (result svc.InstrumentableType) {
 	return matchExeSymbols(ctx)
 }
 
-func contains(slice []string, value string) bool {
-	return slices.Contains(slice, value)
-}
-
 type symbolCollector struct {
-	addresses   map[string]Sym
-	symbolNames []string
-	matches     func(string, []string) (string, bool)
+	addresses map[string]Sym
+	// names are the symbol names to look for. Each is also kept as bytes, to compare it with a name
+	// that is read from the file without making a string of every name of the table.
+	names   []string
+	nameBuf [][]byte
+	matches func(symbol []byte, names []string, nameBuf [][]byte) (string, bool)
 }
 
-func collectSymbols(f *elf.File, syms []elf.Symbol, collectors []symbolCollector, types ...elf.SymType) {
+func newSymbolCollector(
+	addresses map[string]Sym,
+	names []string,
+	matches func([]byte, []string, [][]byte) (string, bool),
+) symbolCollector {
+	nameBuf := make([][]byte, len(names))
+	for i, n := range names {
+		nameBuf[i] = []byte(n)
+	}
+	return symbolCollector{addresses: addresses, names: names, nameBuf: nameBuf, matches: matches}
+}
+
+// collectSymbols reads the symbol table of type tableType and records the symbols that a
+// collector matches. It does not load the table into memory, see forEachELFSymbol.
+func collectSymbols(f *elf.File, tableType elf.SectionType, collectors []symbolCollector, types ...elf.SymType) error {
 	if len(types) == 0 {
 		types = []elf.SymType{elf.STT_FUNC}
 	}
-	for _, s := range syms {
+	err := forEachELFSymbol(f, tableType, func(s *elfSymbol) {
 		if !slices.Contains(types, elf.ST_TYPE(s.Info)) {
-			continue
+			return
+		}
+
+		name, ok := s.name()
+		if !ok {
+			return
 		}
 
 		var sym *Sym
 		for _, collector := range collectors {
-			key, ok := collector.matches(s.Name, collector.symbolNames)
+			key, ok := collector.matches(name, collector.names, collector.nameBuf)
 			if !ok {
 				continue
 			}
 
 			if sym == nil {
-				resolvedSym := resolveSymbol(f, s)
+				resolvedSym := resolveSymbol(f, elf.Symbol{
+					Name:  string(name),
+					Info:  s.Info,
+					Value: s.Value,
+					Size:  s.Size,
+				})
 				sym = &resolvedSym
 			}
 			collector.addresses[key] = *sym
 		}
+	})
+	if errors.Is(err, elf.ErrNoSymbols) {
+		return nil
 	}
+	return err
 }
 
 func FindExeSymbols(f *elf.File, symbolNames []string, types ...elf.SymType) (map[string]Sym, error) {
@@ -152,31 +179,20 @@ func FindExeSymbolsByNameAndSubstring(f *elf.File, symbolNames, symbolSubstrings
 	exactAddresses := map[string]Sym{}
 	substringAddresses := map[string]Sym{}
 	collectors := []symbolCollector{
-		{
-			addresses:   exactAddresses,
-			symbolNames: symbolNames,
-			matches:     exactSymbolMatch,
-		},
-		{
-			addresses:   substringAddresses,
-			symbolNames: symbolSubstrings,
-			matches:     substringSymbolMatch,
-		},
+		newSymbolCollector(exactAddresses, symbolNames, exactSymbolMatch),
+		newSymbolCollector(substringAddresses, symbolSubstrings, substringSymbolMatch),
 	}
 
-	syms, err := f.Symbols()
-	if err != nil && !errors.Is(err, elf.ErrNoSymbols) {
+	// The symbol tables of a large C or C++ binary (a database server, a browser) hold hundreds of
+	// thousands of symbols, and this function runs for each group of probes of a binary, so
+	// the tables are streamed and not loaded: see forEachELFSymbol.
+	if err := collectSymbols(f, elf.SHT_SYMTAB, collectors, types...); err != nil {
 		return nil, nil, err
 	}
 
-	collectSymbols(f, syms, collectors, types...)
-
-	dynsyms, err := f.DynamicSymbols()
-	if err != nil && !errors.Is(err, elf.ErrNoSymbols) {
+	if err := collectSymbols(f, elf.SHT_DYNSYM, collectors, types...); err != nil {
 		return nil, nil, err
 	}
-
-	collectSymbols(f, dynsyms, collectors, types...)
 
 	return exactAddresses, substringAddresses, nil
 }
@@ -202,17 +218,19 @@ func resolveSymbol(f *elf.File, s elf.Symbol) Sym {
 	return Sym{Name: s.Name, Off: address, Value: s.Value, Len: s.Size, Prog: p}
 }
 
-func exactSymbolMatch(symbolName string, names []string) (string, bool) {
-	if contains(names, symbolName) {
-		return symbolName, true
+func exactSymbolMatch(symbolName []byte, names []string, _ [][]byte) (string, bool) {
+	for _, n := range names {
+		if string(symbolName) == n {
+			return n, true
+		}
 	}
 	return "", false
 }
 
-func substringSymbolMatch(symbolName string, substrings []string) (string, bool) {
-	for _, substring := range substrings {
-		if strings.Contains(symbolName, substring) {
-			return substring, true
+func substringSymbolMatch(symbolName []byte, substrings []string, substringBytes [][]byte) (string, bool) {
+	for i, substring := range substringBytes {
+		if bytes.Contains(symbolName, substring) {
+			return substrings[i], true
 		}
 	}
 	return "", false
