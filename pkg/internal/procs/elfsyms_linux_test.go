@@ -7,7 +7,11 @@ package procs
 
 import (
 	"bytes"
+	"compress/zlib"
 	"debug/elf"
+	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,8 +24,9 @@ import (
 )
 
 // referenceFindExeSymbols is the lookup as it was before the tables were streamed: it loads both
-// tables with the standard library. The streaming lookup must return the same result.
-func referenceFindExeSymbols(t testing.TB, f *elf.File, names, substrings []string, types ...elf.SymType) (map[string]Sym, map[string]Sym) {
+// tables with the standard library. The streaming lookup must return the same result and the
+// same errors: any error but elf.ErrNoSymbols is returned.
+func referenceFindExeSymbols(t testing.TB, f *elf.File, names, substrings []string, types ...elf.SymType) (map[string]Sym, map[string]Sym, error) {
 	t.Helper()
 	if len(types) == 0 {
 		types = []elf.SymType{elf.STT_FUNC}
@@ -50,14 +55,16 @@ func referenceFindExeSymbols(t testing.TB, f *elf.File, names, substrings []stri
 		}
 	}
 	syms, err := f.Symbols()
-	if err == nil {
-		collect(syms)
+	if err != nil && !errors.Is(err, elf.ErrNoSymbols) {
+		return nil, nil, err
 	}
+	collect(syms)
 	dyn, err := f.DynamicSymbols()
-	if err == nil {
-		collect(dyn)
+	if err != nil && !errors.Is(err, elf.ErrNoSymbols) {
+		return nil, nil, err
 	}
-	return exact, sub
+	collect(dyn)
+	return exact, sub, nil
 }
 
 // openSelf opens a Go executable that has a symbol table: the test binary is stripped in some
@@ -95,7 +102,8 @@ func TestFindExeSymbolsMatchesStandardLibrary(t *testing.T) {
 	substrings := []string{"TestFindExeSymbols", "runtime.mallocgc", "no.such.substring"}
 
 	for _, types := range [][]elf.SymType{nil, {elf.STT_OBJECT}, {elf.STT_FUNC, elf.STT_OBJECT}} {
-		wantExact, wantSub := referenceFindExeSymbols(t, f, names, substrings, types...)
+		wantExact, wantSub, err := referenceFindExeSymbols(t, f, names, substrings, types...)
+		require.NoError(t, err)
 		gotExact, gotSub, err := FindExeSymbolsByNameAndSubstring(f, names, substrings, types...)
 		require.NoError(t, err)
 		assert.Equal(t, wantExact, gotExact, "exact, types %v", types)
@@ -118,7 +126,8 @@ func TestFindExeSymbolsDynamicTable(t *testing.T) {
 		for _, s := range dyn {
 			names = append(names, s.Name)
 		}
-		wantExact, wantSub := referenceFindExeSymbols(t, f, names, []string{"mem", "str"})
+		wantExact, wantSub, err := referenceFindExeSymbols(t, f, names, []string{"mem", "str"})
+		require.NoError(t, err)
 		gotExact, gotSub, err := FindExeSymbolsByNameAndSubstring(f, names, []string{"mem", "str"})
 		_ = f.Close()
 		require.NoError(t, err)
@@ -149,7 +158,7 @@ func TestFindExeSymbolsAllocatesLittle(t *testing.T) {
 	}
 
 	names := []string{"runtime.mallocgc"}
-	oldBytes := measure(func() { referenceFindExeSymbols(t, f, names, nil) })
+	oldBytes := measure(func() { _, _, _ = referenceFindExeSymbols(t, f, names, nil) })
 	newBytes := measure(func() {
 		_, _, err := FindExeSymbolsByNameAndSubstring(f, names, nil)
 		require.NoError(t, err)
@@ -229,6 +238,218 @@ func TestStrtabReaderReadError(t *testing.T) {
 	r := newStrtabReader(failingReaderAt{}, 100)
 	_, ok := r.cString(1)
 	assert.False(t, ok)
+	assert.ErrorIs(t, r.err, io.ErrUnexpectedEOF, "a read error is kept, it is not a missing string")
+
+	r = newStrtabReader(bytes.NewReader([]byte("\x00abc\x00")), 5)
+	_, ok = r.cString(100)
+	assert.False(t, ok)
+	assert.NoError(t, r.err, "a name outside of the table is not a read error")
+}
+
+// The limit is on the length of the name, wherever the terminating NUL is.
+func TestStrtabReaderNameLimit(t *testing.T) {
+	// start puts the end of a name of maxSymbolNameLen bytes at the end of a block, so that
+	// the NUL is the first byte of the next block
+	startAtBlockEnd := strBlockSize - (maxSymbolNameLen % strBlockSize)
+	for _, tc := range []struct {
+		name    string
+		start   int
+		nameLen int
+		ok      bool
+	}{
+		{"max, NUL in the same block as the last letter", 1, maxSymbolNameLen, true},
+		{"max, NUL in the next block", startAtBlockEnd, maxSymbolNameLen, true},
+		{"max + 1, NUL in the same block", 1, maxSymbolNameLen + 1, false},
+		{"max + 1, NUL in the next block", startAtBlockEnd - 1, maxSymbolNameLen + 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tab := make([]byte, tc.start+tc.nameLen+1)
+			for i := range tc.nameLen {
+				tab[tc.start+i] = 'n'
+			}
+			r := newStrtabReader(bytes.NewReader(tab), int64(len(tab)))
+			got, ok := r.cString(uint32(tc.start))
+			assert.Equal(t, tc.ok, ok)
+			assert.NoError(t, r.err)
+			if ok {
+				assert.Len(t, got, tc.nameLen)
+			}
+		})
+	}
+}
+
+// failAtReaderAt serves the file but fails for any read that touches [off, off+size).
+type failAtReaderAt struct {
+	r         io.ReaderAt
+	off, size int64
+}
+
+var errInjected = errors.New("injected read failure")
+
+func (f failAtReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if off < f.off+f.size && off+int64(len(p)) > f.off {
+		return 0, errInjected
+	}
+	return f.r.ReadAt(p, off)
+}
+
+// openWithUnreadableSection opens the executable at path with the standard library, and a
+// second time so that the contents of the section fail to read.
+func openWithUnreadableSection(t *testing.T, path, section string) *elf.File {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	good, err := elf.NewFile(bytes.NewReader(data))
+	require.NoError(t, err)
+	sec := good.Section(section)
+	if sec == nil {
+		return nil
+	}
+	f, err := elf.NewFile(failAtReaderAt{r: bytes.NewReader(data), off: int64(sec.Offset), size: int64(sec.FileSize)})
+	require.NoError(t, err)
+	return f
+}
+
+// A string table that cannot be read is an error, as it is for the standard library, and not
+// a symbol table without the symbols.
+func TestFindExeSymbolsStringTableReadError(t *testing.T) {
+	selfPath := filepath.Join(runtime.GOROOT(), "bin", "go")
+	for _, tc := range []struct {
+		name    string
+		section string
+		paths   []string
+	}{
+		{"symtab", ".strtab", []string{selfPath, os.Args[0]}},
+		{"dynsym", ".dynstr", []string{"/bin/sh", "/bin/ls", "/usr/bin/env"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var f *elf.File
+			for _, path := range tc.paths {
+				if f = openWithUnreadableSection(t, path, tc.section); f != nil {
+					break
+				}
+			}
+			if f == nil {
+				t.Skip("no executable with a " + tc.section + " section found")
+			}
+			_, _, wantErr := referenceFindExeSymbols(t, f, []string{"runtime.mallocgc", "malloc"}, []string{"mem"})
+			require.Error(t, wantErr, "the standard library fails")
+
+			_, _, err := FindExeSymbolsByNameAndSubstring(f, []string{"runtime.mallocgc", "malloc"}, []string{"mem"})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, errInjected)
+		})
+	}
+}
+
+// elfFixture writes a small ELF file with the symbols "sym_<i>" for i < count, to test the
+// layouts the executables of the machine of the test do not have.
+func elfFixture(t *testing.T, class elf.Class, order binary.ByteOrder, compressed bool, count int) []byte {
+	t.Helper()
+	strtab := []byte{0}
+	var symtab bytes.Buffer
+	write := func(v any) { require.NoError(t, binary.Write(&symtab, order, v)) }
+	if class == elf.ELFCLASS64 {
+		write(elf.Sym64{})
+	} else {
+		write(elf.Sym32{})
+	}
+	for i := range count {
+		nameOff := uint32(len(strtab))
+		strtab = append(strtab, []byte(fmt.Sprintf("sym_%d", i))...)
+		strtab = append(strtab, 0)
+		info := byte(elf.STB_GLOBAL<<4) | byte(elf.STT_FUNC)
+		if class == elf.ELFCLASS64 {
+			write(elf.Sym64{Name: nameOff, Info: info, Shndx: 1, Value: 0x1000 + uint64(i)*16, Size: 8})
+		} else {
+			write(elf.Sym32{Name: nameOff, Info: info, Shndx: 1, Value: 0x1000 + uint32(i)*16, Size: 8})
+		}
+	}
+	shstrtab := []byte("\x00.symtab\x00.strtab\x00.shstrtab\x00")
+
+	// contents of the sections as they are in the file
+	pack := func(raw []byte) ([]byte, uint64) {
+		if !compressed {
+			return raw, 0
+		}
+		var b bytes.Buffer
+		if class == elf.ELFCLASS64 {
+			require.NoError(t, binary.Write(&b, order, elf.Chdr64{Type: uint32(elf.COMPRESS_ZLIB), Size: uint64(len(raw)), Addralign: 1}))
+		} else {
+			require.NoError(t, binary.Write(&b, order, elf.Chdr32{Type: uint32(elf.COMPRESS_ZLIB), Size: uint32(len(raw)), Addralign: 1}))
+		}
+		z := zlib.NewWriter(&b)
+		_, err := z.Write(raw)
+		require.NoError(t, err)
+		require.NoError(t, z.Close())
+		return b.Bytes(), uint64(elf.SHF_COMPRESSED)
+	}
+	symData, symFlags := pack(symtab.Bytes())
+	strData, strFlags := pack(strtab)
+
+	ehSize, shSize, symEnt := 64, 64, elf.Sym64Size
+	if class == elf.ELFCLASS32 {
+		ehSize, shSize, symEnt = 52, 40, elf.Sym32Size
+	}
+	symOff := ehSize
+	strOff := symOff + len(symData)
+	shstrOff := strOff + len(strData)
+	shOff := shstrOff + len(shstrtab)
+
+	var out bytes.Buffer
+	ident := [16]byte{0x7f, 'E', 'L', 'F', byte(class), byte(elf.ELFDATA2LSB)}
+	if order == binary.BigEndian {
+		ident[5] = byte(elf.ELFDATA2MSB)
+	}
+	ident[6] = byte(elf.EV_CURRENT)
+	put := func(v any) { require.NoError(t, binary.Write(&out, order, v)) }
+	if class == elf.ELFCLASS64 {
+		put(elf.Header64{Ident: ident, Type: uint16(elf.ET_EXEC), Machine: uint16(elf.EM_X86_64), Version: uint32(elf.EV_CURRENT),
+			Shoff: uint64(shOff), Ehsize: uint16(ehSize), Shentsize: uint16(shSize), Shnum: 4, Shstrndx: 3})
+	} else {
+		put(elf.Header32{Ident: ident, Type: uint16(elf.ET_EXEC), Machine: uint16(elf.EM_386), Version: uint32(elf.EV_CURRENT),
+			Shoff: uint32(shOff), Ehsize: uint16(ehSize), Shentsize: uint16(shSize), Shnum: 4, Shstrndx: 3})
+	}
+	out.Write(symData)
+	out.Write(strData)
+	out.Write(shstrtab)
+	section := func(name uint32, typ elf.SectionType, flags uint64, off, size int, link uint32, entsize int) {
+		if class == elf.ELFCLASS64 {
+			put(elf.Section64{Name: name, Type: uint32(typ), Flags: flags, Off: uint64(off), Size: uint64(size), Link: link, Addralign: 1, Entsize: uint64(entsize)})
+		} else {
+			put(elf.Section32{Name: name, Type: uint32(typ), Flags: uint32(flags), Off: uint32(off), Size: uint32(size), Link: link, Addralign: 1, Entsize: uint32(entsize)})
+		}
+	}
+	section(0, elf.SHT_NULL, 0, 0, 0, 0, 0)
+	section(1, elf.SHT_SYMTAB, symFlags, symOff, len(symData), 2, symEnt)
+	section(9, elf.SHT_STRTAB, strFlags, strOff, len(strData), 0, 0)
+	section(17, elf.SHT_STRTAB, 0, shstrOff, len(shstrtab), 0, 0)
+	return out.Bytes()
+}
+
+// The streaming lookup returns what the standard library does for every layout of a symbol table.
+func TestFindExeSymbolsELFFormats(t *testing.T) {
+	for _, class := range []elf.Class{elf.ELFCLASS64, elf.ELFCLASS32} {
+		for _, order := range []binary.ByteOrder{binary.LittleEndian, binary.BigEndian} {
+			for _, compressed := range []bool{false, true} {
+				name := fmt.Sprintf("%v/%v/compressed=%v", class, order, compressed)
+				t.Run(name, func(t *testing.T) {
+					// more entries than one chunk, so that the chunk boundary is crossed
+					data := elfFixture(t, class, order, compressed, symChunkEntries*2+5)
+					f, err := elf.NewFile(bytes.NewReader(data))
+					require.NoError(t, err)
+					names := []string{"sym_0", "sym_1023", "sym_1024", "sym_2052", "sym_9999"}
+					wantExact, wantSub, wantErr := referenceFindExeSymbols(t, f, names, []string{"sym_20"})
+					require.NoError(t, wantErr)
+					require.Len(t, wantExact, 4)
+					gotExact, gotSub, err := FindExeSymbolsByNameAndSubstring(f, names, []string{"sym_20"})
+					require.NoError(t, err)
+					assert.Equal(t, wantExact, gotExact)
+					assert.Equal(t, wantSub, gotSub)
+				})
+			}
+		}
+	}
 }
 
 func TestForEachELFSymbolNoTable(t *testing.T) {

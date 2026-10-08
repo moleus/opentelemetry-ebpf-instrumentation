@@ -20,7 +20,10 @@ const (
 	// read through a direct-mapped cache of strBlockCount blocks of strBlockSize bytes.
 	strBlockSize  = 4 << 10
 	strBlockCount = 64
-	// maxSymbolNameLen is the longest symbol name that is looked at. A longer name does not match.
+	// maxSymbolNameLen is the longest symbol name (in bytes, without the terminating NUL) that
+	// is looked at. A longer name does not match. The standard library has no such limit; a name
+	// of this length is not a symbol of any real program (the longest C++ and Rust names are
+	// some kilobytes), and the limit keeps one damaged string table from filling memory.
 	maxSymbolNameLen = 1 << 20
 )
 
@@ -34,7 +37,9 @@ type elfSymbol struct {
 	names   *strtabReader
 }
 
-// name returns the name of the symbol, or false if the string table has no such string.
+// name returns the name of the symbol, or false if the string table has no such string
+// (or the string is longer than maxSymbolNameLen). If the string table cannot be read, name
+// returns false too and forEachELFSymbol stops with the read error after fn returns.
 // The slice is valid only until the next call of name on any symbol of the same table.
 func (s *elfSymbol) name() ([]byte, bool) {
 	return s.names.cString(s.nameIdx)
@@ -112,6 +117,9 @@ func forEachELFSymbol(f *elf.File, typ elf.SectionType, fn func(*elfSymbol)) err
 				sym.Info = e[12]
 			}
 			fn(&sym)
+			if sym.names.err != nil {
+				return fmt.Errorf("can't read the string table: %w", sym.names.err)
+			}
 		}
 	}
 	return nil
@@ -152,6 +160,9 @@ type strtabReader struct {
 	blocks [strBlockCount]strBlock
 	// spill holds a string that crosses the end of a block.
 	spill []byte
+	// err is the first error of the reader of the table. A string that is not in the table is
+	// not an error: cString reports it with false only.
+	err error
 }
 
 type strBlock struct {
@@ -180,6 +191,9 @@ func (t *strtabReader) block(idx int64) ([]byte, bool) {
 	b.n = 0
 	n := int(min(t.size-start, strBlockSize))
 	if err := readFullAt(t.r, b.data[:n], start); err != nil {
+		if t.err == nil {
+			t.err = err
+		}
 		return nil, false
 	}
 	b.idx, b.n = idx, n
@@ -188,7 +202,8 @@ func (t *strtabReader) block(idx int64) ([]byte, bool) {
 
 // cString returns the string that starts at offset off, without the terminating NUL.
 // It returns false if off is outside of the table, or if the string has no terminator within
-// the table or is longer than maxSymbolNameLen. The slice is valid until the next call.
+// the table or is longer than maxSymbolNameLen, or if the table cannot be read (t.err is set).
+// The slice is valid until the next call.
 func (t *strtabReader) cString(off uint32) ([]byte, bool) {
 	pos := int64(off)
 	if pos >= t.size {
@@ -204,6 +219,9 @@ func (t *strtabReader) cString(off uint32) ([]byte, bool) {
 		if end := bytes.IndexByte(in, 0); end >= 0 {
 			if len(t.spill) == 0 {
 				return in[:end], true
+			}
+			if len(t.spill)+end > maxSymbolNameLen {
+				return nil, false
 			}
 			t.spill = append(t.spill, in[:end]...)
 			return t.spill, true
