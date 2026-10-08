@@ -841,24 +841,59 @@ func enrichmentTestConfig() config.EBPFTracer {
 // The response large buffer can be lost (ring buffer overflow, LRU eviction):
 // the span must keep the request headers selected by the enrichment rules.
 func TestHTTPInfoEventToSpan_EnrichesRequestWithoutResponse(t *testing.T) {
-	const reqHead = "POST /v3/subscribe HTTP/1.1\r\nHost: configs.example.test\r\nX-Request-Id: r1\r\nUser-Agent: x\r\nContent-Length: 600\r\n\r\n{\"k\":"
+	const reqHead = "POST /items/watch HTTP/1.1\r\nHost: svc.example.test\r\nX-Request-Id: r1\r\nUser-Agent: x\r\nContent-Length: 600\r\n\r\n{\"k\":"
+	const truncatedHead = "POST /items/watch HTTP/1.1\r\nHost: svc.example.test\r\nX-Req"
+	const badRequest = "POST /bad HTTP/1.1\r\nthis header line has no colon\r\n\r\n"
 	connInfo := BpfConnectionInfoT{D_port: 80}
 	traceID := [16]uint8{'t', 'r', 'a', 'c', 'e', 1}
 
 	tests := []struct {
 		name         string
-		largeRequest bool // the request large buffer is present
+		head         string // the request bytes of the event
+		largeRequest bool   // the request large buffer is present, with head
 		largeResp    string
-		wantHeaders  bool
+		responseOnly bool // the rules apply to the response scope only
+		wantPath     string
+		wantHeaders  map[string][]string // nil: the span has no request headers
 	}{
-		{name: "response buffer missing, request buffer present", largeRequest: true, wantHeaders: true},
-		{name: "both buffers missing, primary buffer used", wantHeaders: true},
-		{name: "response does not parse", largeRequest: true, largeResp: "garbage\x00\x01", wantHeaders: true},
+		{
+			name: "response buffer missing, request buffer present", head: reqHead, largeRequest: true,
+			wantPath:    "/items/watch",
+			wantHeaders: map[string][]string{"Host": {"svc.example.test"}, "X-Request-Id": {"r1"}},
+		},
+		{
+			name: "both buffers missing, primary buffer used", head: reqHead,
+			wantPath:    "/items/watch",
+			wantHeaders: map[string][]string{"Host": {"svc.example.test"}, "X-Request-Id": {"r1"}},
+		},
+		{
+			name: "response does not parse", head: reqHead, largeRequest: true, largeResp: "garbage\x00\x01",
+			wantPath:    "/items/watch",
+			wantHeaders: map[string][]string{"Host": {"svc.example.test"}, "X-Request-Id": {"r1"}},
+		},
+		{
+			// the parser needs the end of the headers: a request that is cut inside the
+			// headers keeps none (the span is the one of the request line parser)
+			name: "request headers cut off", head: truncatedHead, largeRequest: true,
+			wantPath: "/items/watch",
+		},
+		{
+			// no headers to keep: the span of the request line parser is returned as it was
+			name: "request does not parse", head: badRequest, largeRequest: true, largeResp: "garbage\x00\x01",
+			wantPath: "/bad",
+		},
+		{
+			name: "rules of the response scope do not touch the request", head: reqHead, largeRequest: true,
+			responseOnly: true, wantPath: "/items/watch",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := enrichmentTestConfig()
+			if tc.responseOnly {
+				cfg.PayloadExtraction.HTTP.Enrichment.Rules[0].Scope = config.HTTPParsingScopeResponse
+			}
 			pctx := NewEBPFParseContext(&cfg, nil, nil)
 			require.NotNil(t, pctx.httpEnricher)
 
@@ -868,7 +903,7 @@ func TestHTTPInfoEventToSpan_EnrichesRequestWithoutResponse(t *testing.T) {
 			event.HasLargeBuffers = 1
 			event.ConnInfo = connInfo
 			event.Tp.TraceId = traceID
-			copy(event.Buf[:], reqHead)
+			copy(event.Buf[:], tc.head)
 
 			add := func(packetType uint8, payload string) {
 				hdr := TCPLargeBufferHeader{PacketType: packetType, Len: uint32(len(payload)), Action: largeBufferActionInit, Kind: uint8(KindLayerApp)}
@@ -878,7 +913,7 @@ func TestHTTPInfoEventToSpan_EnrichesRequestWithoutResponse(t *testing.T) {
 				require.NoError(t, err)
 			}
 			if tc.largeRequest {
-				add(packetTypeRequest, reqHead)
+				add(packetTypeRequest, tc.head)
 			}
 			if tc.largeResp != "" {
 				add(packetTypeResponse, tc.largeResp)
@@ -887,12 +922,13 @@ func TestHTTPInfoEventToSpan_EnrichesRequestWithoutResponse(t *testing.T) {
 			span, ignored, err := HTTPInfoEventToSpan(pctx, &event)
 			require.NoError(t, err)
 			assert.False(t, ignored)
-			assert.Equal(t, "/v3/subscribe", span.Path)
+			assert.Equal(t, tc.wantPath, span.Path)
 			assert.Equal(t, 200, span.Status)
-			assert.Equal(t, []string{"configs.example.test"}, span.RequestHeaders["Host"])
-			assert.Equal(t, []string{"r1"}, span.RequestHeaders["X-Request-Id"])
-			_, hasUA := span.RequestHeaders["User-Agent"]
-			assert.False(t, hasUA, "headers outside the rules stay excluded")
+			if tc.wantHeaders == nil {
+				assert.Nil(t, span.RequestHeaders)
+				return
+			}
+			assert.Equal(t, tc.wantHeaders, map[string][]string(span.RequestHeaders))
 		})
 	}
 }

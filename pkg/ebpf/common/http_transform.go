@@ -414,7 +414,8 @@ func HTTPInfoEventToSpan(parseCtx *EBPFParseContext, event *BPFHTTPInfo) (reques
 	if err != nil || err2 != nil {
 		slog.Debug("error while parsing http request or response, falling back to manual HTTP info parsing", "reqErr", err, "respErr", err2)
 		if err != nil {
-			req = nil
+			// the request does not parse: there are no headers to keep
+			return httpRequestToSpan(event, requestBuffer), false, nil
 		}
 		return httpRequestOnlyToSpan(parseCtx, event, requestBuffer, req), false, nil
 	}
