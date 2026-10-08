@@ -137,10 +137,12 @@ func isRingBuf(t ebpf.MapType) bool {
 // If globalScaleFactor > 0, sizes are doubled that many times (left shift).
 // If globalScaleFactor < 0, sizes are halved that many times (right shift).
 // Maps with PinByName are skipped regardless of scale factor.
-// Ring buffers only grow: a hash map that is too small evicts its oldest entry,
-// but a ring buffer that is too small drops the events of a burst, and the
-// spans with them. They hold events in transit, not state per request, so a
-// shrunk ring buffer saves little memory and loses data.
+// Ring buffers only grow: a ring buffer that is too small drops the events of a
+// burst, and the spans with them. A hash map that is too small also loses state: an
+// LRU hash evicts its oldest entry, and a plain hash rejects a new entry (E2BIG) when
+// it is full. A ring buffer holds events in transit, not state per request, and has
+// no way to keep the oldest events: with the ring buffers shrunk at scale -3, a test
+// with 1500 requests per second lost 94% of the spans.
 func SetupMapSizes(spec *ebpf.CollectionSpec, globalScaleFactor int) {
 	if globalScaleFactor == 0 {
 		return
