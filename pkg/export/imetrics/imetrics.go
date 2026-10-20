@@ -105,6 +105,8 @@ type Reporter interface {
 	BPFPacketStats(count, ignored uint64)
 	// BPFRingbufWriteCounts reports attempted and failed writes since the previous collection for a ring buffer.
 	BPFRingbufWriteCounts(ringbuf string, writes, failures uint64)
+	// LargeBufferDroppedBytes accounts payload bytes discarded after a configured per-request cap is reached.
+	LargeBufferDroppedBytes(bytes uint64)
 	// QueueBufferUtilization shows the ratio [0-1] between the unread messages of an internal Go channel
 	// and its total capacity
 	QueueBufferUtilization(subscriber string, ratio float64)
@@ -146,3 +148,4 @@ func (n NoopReporter) InformerLag(_ float64)                                    
 func (n NoopReporter) BPFPacketStats(_, _ uint64)                                              {}
 func (n NoopReporter) BPFRingbufWriteCounts(_ string, _, _ uint64)                             {}
 func (n NoopReporter) QueueBufferUtilization(_ string, _ float64)                              {}
+func (n NoopReporter) LargeBufferDroppedBytes(_ uint64)                                        {}

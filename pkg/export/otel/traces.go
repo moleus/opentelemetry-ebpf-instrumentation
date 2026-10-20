@@ -115,11 +115,11 @@ func (tr *tracesOTELReceiver) processSpans(ctx context.Context, exp tracesExport
 				tr.ctxInfo.ExtraResourceAttributes...)
 			err := exp.ConsumeTraces(ctx, traces)
 			if err != nil {
-				// We can't do if errors.Is(err, queue.ErrQueueIsFull), since the queue package is internal
+				if reporter, ok := tr.ctxInfo.Metrics.(interface{ OTELTraceSpansDropped(int) }); ok {
+					reporter.OTELTraceSpansDropped(len(spanGroup))
+				}
 				if err.Error() == "sending queue is full" {
-					// TODO: set this condition case to Warn once we make sure that
-					// queueConfig.BlockOnOverflow = true works as expected
-					slog.Debug("error sending trace to consumer", "error", err)
+					slog.Debug("trace exporter queue is full; dropping spans", "spans", len(spanGroup))
 				} else {
 					slog.Warn("error sending trace to consumer", "error", err)
 				}

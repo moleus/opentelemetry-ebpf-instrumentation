@@ -301,6 +301,8 @@ type pendingGoHTTPClientKey struct {
 
 type EBPFParseContext struct {
 	protocolDebug               bool
+	goHTTPMaxBufferedBytes      int
+	largeBufferDroppedBytes     func(uint64)
 	h2c                         *lru.Cache[uint64, *h2Connection]
 	redisDBCache                *simplelru.LRU[BpfConnectionInfoT, int]
 	couchbaseBucketCache        *simplelru.LRU[BpfConnectionInfoT, CouchbaseBucketInfo]
@@ -395,7 +397,7 @@ func isASCIIDecimal(field []byte) bool {
 	return true
 }
 
-func NewEBPFParseContext(cfg *config.EBPFTracer, spansChan *msg.Queue[[]request.Span], filter ServiceFilter) *EBPFParseContext {
+func NewEBPFParseContext(cfg *config.EBPFTracer, spansChan *msg.Queue[[]request.Span], filter ServiceFilter, onLargeBufferDrop ...func(uint64)) *EBPFParseContext {
 	var (
 		err                        error
 		protocolDebug              bool
@@ -480,6 +482,14 @@ func NewEBPFParseContext(cfg *config.EBPFTracer, spansChan *msg.Queue[[]request.
 
 		dnsEvents = expirable.NewLRU(1024, dnsEventExpireHandler(emitSpans), cfg.DNSRequestTimeout)
 	}
+	var largeBufferDroppedBytes func(uint64)
+	if len(onLargeBufferDrop) > 0 {
+		largeBufferDroppedBytes = onLargeBufferDrop[0]
+	}
+	var goHTTPMaxBufferedBytes int
+	if cfg != nil {
+		goHTTPMaxBufferedBytes = int(cfg.BufferSizes.HTTP)
+	}
 
 	var httpEnricher *ebpfhttp.HTTPEnricher
 	if payloadExtraction.HTTP.Enrichment.Enabled {
@@ -496,6 +506,8 @@ func NewEBPFParseContext(cfg *config.EBPFTracer, spansChan *msg.Queue[[]request.
 
 	parseCtx := &EBPFParseContext{
 		protocolDebug:              protocolDebug,
+		goHTTPMaxBufferedBytes:     goHTTPMaxBufferedBytes,
+		largeBufferDroppedBytes:    largeBufferDroppedBytes,
 		h2c:                        h2c,
 		redisDBCache:               redisDBCache,
 		couchbaseBucketCache:       couchbaseBucketCache,

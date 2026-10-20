@@ -72,6 +72,35 @@ func (lb *LargeBuffer) AppendChunk(data []byte) {
 	lb.total += len(data)
 }
 
+// AppendChunkWithLimit appends at most maxBytes bytes to the buffer and returns
+// the number of bytes it had to drop. Data beyond the limit is discarded. It
+// coalesces data into 16 KiB chunks so a stream of tiny appends cannot create an
+// unbounded number of slice headers.
+func (lb *LargeBuffer) AppendChunkWithLimit(data []byte, maxBytes int) int {
+	originalLength := len(data)
+	remaining := maxBytes - lb.total
+	if remaining <= 0 {
+		return originalLength
+	}
+	if len(data) > remaining {
+		data = data[:remaining]
+	}
+	dropped := originalLength - len(data)
+	for len(data) > 0 {
+		if len(lb.chunks) == 0 || cap(lb.chunks[len(lb.chunks)-1]) == len(lb.chunks[len(lb.chunks)-1]) {
+			chunkCapacity := min(16*1024, maxBytes-lb.total)
+			lb.chunks = append(lb.chunks, make([]byte, 0, chunkCapacity))
+		}
+		last := len(lb.chunks) - 1
+		available := cap(lb.chunks[last]) - len(lb.chunks[last])
+		count := min(len(data), available)
+		lb.chunks[last] = append(lb.chunks[last], data[:count]...)
+		lb.total += count
+		data = data[count:]
+	}
+	return dropped
+}
+
 // Len returns the total number of bytes across all chunks.
 func (lb *LargeBuffer) Len() int {
 	return lb.total

@@ -14,6 +14,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
+	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/ebpf/ringbuf"
 )
 
@@ -129,6 +130,50 @@ func TestTCPLargeBuffers(t *testing.T) {
 	_, _, err = appendTCPLargeBuffer(pctx, toRingbufRecord(t, appendEvent, "bar"))
 	require.NoError(t, err)
 	verifyLargeBuffer(firstEvent.Tp.TraceId, firstEvent.Tp.SpanId, firstEvent.PacketType, firstEvent.Direction, firstEvent.ConnInfo, firstBuf+"foobar")
+}
+
+func TestGoHTTPBufferRespectsPerDirectionCap(t *testing.T) {
+	var droppedBytes uint64
+	pctx := NewEBPFParseContext(
+		&config.EBPFTracer{BufferSizes: config.EBPFBufferSizes{HTTP: 5}},
+		nil,
+		nil,
+		func(dropped uint64) { droppedBytes += dropped },
+	)
+	initEvent := TCPLargeBufferHeader{
+		Type:       EventTypeTCPLargeBuffer,
+		PacketType: packetTypeResponse,
+		Len:        4,
+		Kind:       uint8(KindLayerApp),
+		Source:     uint8(largeBufferSourceGo),
+	}
+	initEvent.Tp.TraceId = [16]uint8{'1'}
+	initEvent.Tp.SpanId = [8]uint8{'2'}
+	initEvent.ConnInfo = BpfConnectionInfoT{D_port: 2000}
+	_, _, err := appendTCPLargeBuffer(pctx, toRingbufRecord(t, initEvent, "abcd"))
+	require.NoError(t, err)
+
+	appendEvent := initEvent
+	appendEvent.Action = largeBufferActionAppend
+	appendEvent.Len = 5
+	_, _, err = appendTCPLargeBuffer(pctx, toRingbufRecord(t, appendEvent, "efghi"))
+	require.NoError(t, err)
+	appendEvent.Len = 2
+	_, _, err = appendTCPLargeBuffer(pctx, toRingbufRecord(t, appendEvent, "jk"))
+	require.NoError(t, err)
+
+	buf, ok := extractTCPLargeBuffer(
+		pctx,
+		initEvent.Tp.TraceId,
+		initEvent.Tp.SpanId,
+		initEvent.PacketType,
+		initEvent.Direction,
+		initEvent.ConnInfo,
+		ProtocolTypeHTTP,
+	)
+	require.True(t, ok)
+	require.Equal(t, "abcde", string(buf.UnsafeView()))
+	require.Equal(t, uint64(6), droppedBytes)
 }
 
 func toRingbufRecord(t *testing.T, event TCPLargeBufferHeader, buf string) *ringbuf.Record {
