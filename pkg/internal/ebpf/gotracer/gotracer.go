@@ -2574,7 +2574,11 @@ func (p *Tracer) AlreadyInstrumentedLib(_ uint64) bool {
 }
 
 func (p *Tracer) Run(ctx context.Context, ebpfEventContext *ebpfcommon.EBPFEventContext, eventsChan *msg.Queue[[]request.Span]) {
-	parseContext := ebpfcommon.NewEBPFParseContext(p.cfg, eventsChan, p.pidsFilter)
+	var largeBufferDrop func(uint64)
+	if p.metrics != nil {
+		largeBufferDrop = p.metrics.LargeBufferDroppedBytes
+	}
+	parseContext := ebpfcommon.NewEBPFParseContext(p.cfg, eventsChan, p.pidsFilter, largeBufferDrop)
 	defer parseContext.Close()
 	defer func() {
 		_ = p.closeAllGoAutoSDKActivationLinks()

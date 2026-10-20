@@ -769,7 +769,11 @@ func (p *Tracer) Run(
 	}
 
 	timeoutTicker := time.NewTicker(2 * time.Second)
-	parseContext := ebpfcommon.NewEBPFParseContext(&p.cfg.EBPF, eventsChan, p.pidsFilter)
+	var largeBufferDrop func(uint64)
+	if p.metrics != nil {
+		largeBufferDrop = p.metrics.LargeBufferDroppedBytes
+	}
+	parseContext := ebpfcommon.NewEBPFParseContext(&p.cfg.EBPF, eventsChan, p.pidsFilter, largeBufferDrop)
 	defer parseContext.Close()
 
 	go p.watchForMisclassifedEvents(ctx)

@@ -57,7 +57,10 @@ type PrometheusReporter struct {
 	bpfRingbufWrites      *prometheus.CounterVec
 	bpfRingbufFailures    *prometheus.CounterVec
 
-	queueCapacityRatio *prometheus.GaugeVec
+	queueCapacityRatio      *prometheus.GaugeVec
+	queueLength             *prometheus.GaugeVec
+	largeBufferDroppedBytes prometheus.Counter
+	traceSpansDropped       prometheus.Counter
 }
 
 func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.PrometheusManager, registry *prometheus.Registry) *PrometheusReporter {
@@ -164,6 +167,18 @@ func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.Promet
 			Name: internalNames.QueueCapacityRatio.Prom,
 			Help: "Ratio [0-1] between the unread messages of an internal Go channel and its total capacity",
 		}, []string{attr.Subscriber.Prom()}),
+		queueLength: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: internalNames.QueueLength.Prom,
+			Help: "Number of unread messages in an internal Go channel",
+		}, []string{attr.Subscriber.Prom()}),
+		largeBufferDroppedBytes: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: internalNames.LargeBufferDroppedBytes.Prom,
+			Help: "Payload bytes discarded after a configured per-request large buffer cap is reached",
+		}),
+		traceSpansDropped: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: internalNames.TraceSpansDropped.Prom,
+			Help: "Trace spans rejected by the configured trace exporter queue",
+		}),
 	}
 	if !cfg.AvoidedServices.Disabled {
 		pr.avoidedServicesLimiter = avoidedsvc.NewLimiter(cfg.AvoidedServices.Limit)
@@ -197,6 +212,10 @@ func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.Promet
 		pr.bpfRingbufWrites,
 		pr.bpfRingbufFailures,
 		pr.queueCapacityRatio,
+		pr.queueLength,
+		pr.largeBufferDroppedBytes,
+		pr.traceSpansDropped,
+		prometheus.NewGoCollector(),
 	}
 	if pr.avoidedServices != nil {
 		metrics = append(metrics, pr.avoidedServices)
@@ -300,6 +319,18 @@ func (p *PrometheusReporter) BPFPacketStats(count, ignored uint64) {
 func (p *PrometheusReporter) BPFRingbufWriteCounts(ringbuf string, writes, failures uint64) {
 	p.bpfRingbufWrites.WithLabelValues(ringbuf).Add(float64(writes))
 	p.bpfRingbufFailures.WithLabelValues(ringbuf).Add(float64(failures))
+}
+
+func (p *PrometheusReporter) LargeBufferDroppedBytes(bytes uint64) {
+	p.largeBufferDroppedBytes.Add(float64(bytes))
+}
+
+func (p *PrometheusReporter) QueueLength(subscriber string, length int) {
+	p.queueLength.WithLabelValues(subscriber).Set(float64(length))
+}
+
+func (p *PrometheusReporter) OTELTraceSpansDropped(spans int) {
+	p.traceSpansDropped.Add(float64(spans))
 }
 
 func (p *PrometheusReporter) QueueBufferUtilization(subscriber string, ratio float64) {

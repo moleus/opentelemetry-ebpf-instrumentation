@@ -102,6 +102,16 @@ type bufferUtilizationRecorder struct {
 
 	mt      sync.Mutex
 	samples map[string]float64
+	lengths map[string]int
+}
+
+func (r *bufferUtilizationRecorder) QueueLength(subscriber string, length int) {
+	r.mt.Lock()
+	defer r.mt.Unlock()
+	if r.lengths == nil {
+		r.lengths = map[string]int{}
+	}
+	r.lengths[subscriber] = length
 }
 
 func (r *bufferUtilizationRecorder) QueueBufferUtilization(subscriber string, ratio float64) {
@@ -118,6 +128,13 @@ func (r *bufferUtilizationRecorder) sample(subscriber string) (float64, bool) {
 	defer r.mt.Unlock()
 	ratio, ok := r.samples[subscriber]
 	return ratio, ok
+}
+
+func (r *bufferUtilizationRecorder) queueLength(subscriber string) (int, bool) {
+	r.mt.Lock()
+	defer r.mt.Unlock()
+	length, ok := r.lengths[subscriber]
+	return length, ok
 }
 
 // The queue buffer utilization gauge defaults to a no-op, so it only reports
@@ -142,6 +159,9 @@ func TestQueueFromConfig_ReportsBufferUtilization(t *testing.T) {
 	ratio, ok := recorder.sample("test-subscriber")
 	require.True(t, ok, "no utilization reported for the subscriber")
 	assert.InDelta(t, 0.5, ratio, 0.0001)
+	length, ok := recorder.queueLength("test-subscriber")
+	require.True(t, ok, "no queue length reported for the subscriber")
+	assert.Equal(t, 1, length)
 
 	assert.Equal(t, 123, testutil.ReadChannel(t, out, timeout))
 	assert.Equal(t, 456, testutil.ReadChannel(t, out, timeout))

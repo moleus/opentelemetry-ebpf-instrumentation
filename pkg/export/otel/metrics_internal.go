@@ -55,7 +55,10 @@ type InternalMetricsReporter struct {
 	bpfRingbufWrites      instrument.Int64Counter
 	bpfRingbufFailures    instrument.Int64Counter
 
-	queueCapacityRatio instrument.Float64Gauge
+	queueCapacityRatio      instrument.Float64Gauge
+	queueLength             instrument.Int64Gauge
+	largeBufferDroppedBytes instrument.Int64Counter
+	traceSpansDropped       instrument.Int64Counter
 
 	internalAttrs attr.InternalAttributes
 }
@@ -231,6 +234,28 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 	if err != nil {
 		return nil, err
 	}
+
+	queueLength, err := meter.Int64Gauge(
+		internalNames.QueueLength.OTEL,
+		instrument.WithDescription("Number of unread messages in an internal Go channel"),
+		instrument.WithUnit(internalNames.QueueLength.Unit))
+	if err != nil {
+		return nil, err
+	}
+	largeBufferDroppedBytes, err := meter.Int64Counter(
+		internalNames.LargeBufferDroppedBytes.OTEL,
+		instrument.WithDescription("Payload bytes discarded after a configured per-request large buffer cap is reached"),
+		instrument.WithUnit(internalNames.LargeBufferDroppedBytes.Unit))
+	if err != nil {
+		return nil, err
+	}
+	traceSpansDropped, err := meter.Int64Counter(
+		internalNames.TraceSpansDropped.OTEL,
+		instrument.WithDescription("Trace spans rejected by the configured trace exporter queue"),
+		instrument.WithUnit(internalNames.TraceSpansDropped.Unit))
+	if err != nil {
+		return nil, err
+	}
 	return &InternalMetricsReporter{
 		ctx:                              ctx,
 		tracerFlushes:                    tracerFlushes,
@@ -253,6 +278,9 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 		bpfRingbufWrites:                 bpfRingbufWrites,
 		bpfRingbufFailures:               bpfRingbufFailures,
 		queueCapacityRatio:               queueCapacityRatio,
+		queueLength:                      queueLength,
+		largeBufferDroppedBytes:          largeBufferDroppedBytes,
+		traceSpansDropped:                traceSpansDropped,
 		internalAttrs:                    internalAttrs,
 	}, nil
 }
@@ -421,6 +449,18 @@ func (p *InternalMetricsReporter) BPFRingbufWriteCounts(ringbuf string, writes, 
 	attrs := sanitizedAttributes(attribute.String(string(attr.BpfMapName), ringbuf))
 	p.bpfRingbufWrites.Add(p.ctx, int64(writes), attrs)
 	p.bpfRingbufFailures.Add(p.ctx, int64(failures), attrs)
+}
+
+func (p *InternalMetricsReporter) LargeBufferDroppedBytes(bytes uint64) {
+	p.largeBufferDroppedBytes.Add(p.ctx, int64(bytes))
+}
+
+func (p *InternalMetricsReporter) QueueLength(subscriber string, length int) {
+	p.queueLength.Record(p.ctx, int64(length), sanitizedAttributes(attribute.String(string(attr.Subscriber), subscriber)))
+}
+
+func (p *InternalMetricsReporter) OTELTraceSpansDropped(spans int) {
+	p.traceSpansDropped.Add(p.ctx, int64(spans))
 }
 
 func (p *InternalMetricsReporter) QueueBufferUtilization(subscriber string, ratio float64) {
