@@ -104,7 +104,7 @@ static int complete(const unsigned char *b, int captured, int req_len) {
 }
 
 int main(void) {
-    unsigned char b[512] = {0};
+    unsigned char b[4096] = {0}; // the largest frame built below is 4096 bytes
     int n;
 
     assert_equal(k_kafka_acks_unknown, kafka_be16(b, 127, 128), "16-bit read cannot cross capture window");
