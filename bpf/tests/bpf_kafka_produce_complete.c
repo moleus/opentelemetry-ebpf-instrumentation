@@ -104,8 +104,16 @@ static int complete(const unsigned char *b, int captured, int req_len) {
 }
 
 int main(void) {
-    unsigned char b[512];
+    unsigned char b[512] = {0};
     int n;
+
+    assert_equal(k_kafka_acks_unknown, kafka_be16(b, 127, 128), "16-bit read cannot cross capture window");
+    assert_equal(k_kafka_acks_unknown, kafka_be16(b, 12, 13), "16-bit read cannot cross captured prefix");
+    assert_equal(k_kafka_acks_unknown, kafka_be16(b, UINT32_MAX, 128), "16-bit read rejects overflowing offset");
+    b[12] = 0xff;
+    b[13] = 0xff;
+    assert_equal(0xffff, kafka_unsigned16(b, 12, 14), "unsigned length retains the null-string marker");
+    assert_equal(k_kafka_acks_unknown, kafka_unsigned16(b, 12, 13), "unsigned length preserves a failed read");
 
     // The request written by a Go client library.
     n = hex(produce_v8_hex, b);
