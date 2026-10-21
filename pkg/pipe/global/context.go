@@ -75,6 +75,10 @@ type ContextInfo struct {
 	// DynamicSelector, when set, restricts App O11y, NetO11y, and StatsO11y signals to
 	// the runtime-selected targets for each signal view. Pass via instrumenter.WithDynamicSelector.
 	DynamicSelector selection.MultiSignalPIDSelector
+
+	// TraceDecider, when set, decides for every application span whether it is exported as a trace.
+	// It runs after the dynamic selector and before the traces exporters; the span metrics are not affected.
+	TraceDecider TraceDecider
 }
 
 // AppO11y stores context information that is only required for application observability.
@@ -84,3 +88,7 @@ type AppO11y struct {
 	// EBPFEventContext provides shared eBPF maps to application observability nodes.
 	EBPFEventContext *ebpfcommon.EBPFEventContext
 }
+
+// TraceDecider returns false for a span that must not be exported as a trace. It is called from one
+// goroutine of the pipeline, for every span, so it must be fast and must not keep the pointer.
+type TraceDecider func(span *request.Span) bool
