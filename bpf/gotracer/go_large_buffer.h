@@ -29,6 +29,7 @@
 #include <common/tp_info.h>
 
 #include <gotracer/go_common.h>
+#include <gotracer/go_large_buffer_cap.h>
 #include <maps/go_ongoing_http_client_requests.h>
 
 #include <gotracer/types/go_large_buffer_req.h>
@@ -231,7 +232,24 @@ static __always_inline void ship_large_request(void *buf,
         bpf_map_update_elem(&ongoing_large_buffers, &prev_key, &event, BPF_ANY);
     }
 
-    large_buf_emit_chunks(large_buf, buf, len, k_large_buf_read_user);
+    u32 emit_len = (u32)len;
+    go_large_buffer_req_t *msg = bpf_map_lookup_elem(&ongoing_large_buffers, &prev_key);
+    if (msg) {
+        u32 *sent = &msg->sent[0];
+        if (packet_type == PACKET_TYPE_RESPONSE) {
+            sent = &msg->sent[1];
+            if (is_http == k_http_response) {
+                // a new response on this connection
+                *sent = 0;
+            }
+        }
+        emit_len = go_large_buf_emit_len(sent, emit_len, http_max_captured_bytes);
+        if (!emit_len) {
+            return;
+        }
+    }
+
+    large_buf_emit_chunks(large_buf, buf, emit_len, k_large_buf_read_user);
 }
 
 static __always_inline bool http_large_buffers_enabled() {
