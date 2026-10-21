@@ -6,7 +6,6 @@ package otel
 import (
 	"context"
 	"encoding/pem"
-	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -163,7 +162,7 @@ func TestGRPCTraceClientRetriesStalledRequest(t *testing.T) {
 	require.EqualValues(t, 1, reporter.exports.Load())
 }
 
-func TestTraceQueueCountsSpansAndUnblocksOnShutdown(t *testing.T) {
+func TestTraceQueueRejectsWhenFullWithoutBlocking(t *testing.T) {
 	cfg := otelcfg.TracesConfig{QueueSize: 2}
 	exp := newOBITracesExporter(cfg, nil, func(context.Context, ptrace.Traces) error {
 		return nil
@@ -177,17 +176,8 @@ func TestTraceQueueCountsSpansAndUnblocksOnShutdown(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	require.ErrorIs(t, exp.ConsumeTraces(ctx, oneSpan()), context.DeadlineExceeded)
-
-	done := make(chan error, 1)
-	go func() { done <- exp.ConsumeTraces(context.Background(), oneSpan()) }()
+	require.EqualError(t, exp.ConsumeTraces(ctx, oneSpan()), "sending queue is full")
 	require.NoError(t, exp.Shutdown(context.Background()))
-	select {
-	case err := <-done:
-		require.True(t, errors.Is(err, context.Canceled) || err.Error() == "trace exporter is shut down")
-	case <-time.After(time.Second):
-		t.Fatal("producer remained blocked after shutdown")
-	}
 }
 
 func TestTraceQueueFlushesAfterPipelineCancellation(t *testing.T) {

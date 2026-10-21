@@ -94,8 +94,6 @@ type obiTracesExporter struct {
 	queue         chan queuedTraces
 	queueSize     int64
 	queueSlots    *semaphore.Weighted
-	queueContext  context.Context
-	queueCancel   context.CancelFunc
 	workerCancel  context.CancelFunc
 	queueMu       sync.RWMutex
 	queueClosed   bool
@@ -130,7 +128,6 @@ func (e *obiTracesExporter) Shutdown(ctx context.Context) error {
 	var drainErr error
 	e.shutdownOnce.Do(func() {
 		if e.queue != nil {
-			e.queueCancel()
 			e.queueMu.Lock()
 			e.queueClosed = true
 			close(e.queue)
@@ -173,12 +170,13 @@ func (e *obiTracesExporter) enqueue(ctx context.Context, traces ptrace.Traces) e
 	if spans > e.queueSize {
 		return errors.New("sending queue is full")
 	}
-	waitCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	stop := context.AfterFunc(e.queueContext, cancel)
-	defer stop()
-	if err := e.queueSlots.Acquire(waitCtx, spans); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
+	}
+	// The exporter queue is bounded by span count. When it is full, reject the
+	// batch immediately so a slow Collector cannot hold more spans in OBI memory.
+	if !e.queueSlots.TryAcquire(spans) {
+		return errors.New("sending queue is full")
 	}
 
 	e.queueMu.RLock()
@@ -188,7 +186,16 @@ func (e *obiTracesExporter) enqueue(ctx context.Context, traces ptrace.Traces) e
 		return errors.New("trace exporter is shut down")
 	}
 	e.queue <- queuedTraces{traces: traces, spans: spans}
+	if reporter, ok := e.reporter.(interface{ QueueLength(string, int) }); ok {
+		reporter.QueueLength("otel_traces", len(e.queue))
+	}
 	return nil
+}
+
+func (e *obiTracesExporter) recordDroppedSpans(spans int) {
+	if reporter, ok := e.reporter.(interface{ OTELTraceSpansDropped(int) }); ok {
+		reporter.OTELTraceSpansDropped(spans)
+	}
 }
 
 func (e *obiTracesExporter) export(ctx context.Context, traces ptrace.Traces) error {
@@ -214,6 +221,7 @@ func (e *obiTracesExporter) runQueue(ctx context.Context) {
 		workers.Go(func() {
 			for batch := range batches {
 				if err := e.export(ctx, batch); err != nil {
+					e.recordDroppedSpans(batch.SpanCount())
 					slog.Warn("error sending trace to consumer", "error", err)
 				}
 			}
@@ -234,6 +242,7 @@ func (e *obiTracesExporter) runQueue(ctx context.Context) {
 		select {
 		case batches <- batch:
 		case <-ctx.Done():
+			e.recordDroppedSpans(batchSpans)
 		}
 		batch = ptrace.NewTraces()
 		batchSpans = 0
@@ -255,6 +264,9 @@ func (e *obiTracesExporter) runQueue(ctx context.Context) {
 				return
 			}
 			e.queueSlots.Release(queued.spans)
+			if reporter, ok := e.reporter.(interface{ QueueLength(string, int) }); ok {
+				reporter.QueueLength("otel_traces", len(e.queue))
+			}
 			if e.batchMaxSize == 0 {
 				for _, resource := range queued.traces.ResourceSpans().All() {
 					resource.CopyTo(batch.ResourceSpans().AppendEmpty())
@@ -320,12 +332,14 @@ func newOBITracesExporter(cfg otelcfg.TracesConfig, reporter imetrics.Reporter, 
 		exporter.queue = make(chan queuedTraces, queueSize)
 		exporter.queueSize = int64(queueSize)
 		exporter.queueSlots = semaphore.NewWeighted(int64(queueSize))
-		exporter.queueContext, exporter.queueCancel = context.WithCancel(context.Background())
 		exporter.workerDone = make(chan struct{})
 		exporter.batchMaxSize = cfg.BatchMaxSize
 		exporter.batchTimeout = cfg.BatchTimeout
 		if exporter.batchTimeout == 0 {
 			exporter.batchTimeout = defaultTraceFlushDelay
+		}
+		if reporter, ok := reporter.(interface{ QueueLength(string, int) }); ok {
+			reporter.QueueLength("otel_traces", 0)
 		}
 	}
 	return exporter
