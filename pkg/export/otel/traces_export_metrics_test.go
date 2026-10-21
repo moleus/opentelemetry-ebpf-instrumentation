@@ -28,10 +28,12 @@ type countingTracesReporter struct {
 	imetrics.NoopReporter
 	exports    atomic.Int64
 	exportErrs atomic.Int64
+	dropped    atomic.Int64
 }
 
-func (c *countingTracesReporter) OTELTraceExport(spans int)  { c.exports.Add(int64(spans)) }
-func (c *countingTracesReporter) OTELTraceExportError(error) { c.exportErrs.Add(1) }
+func (c *countingTracesReporter) OTELTraceExport(spans int)       { c.exports.Add(int64(spans)) }
+func (c *countingTracesReporter) OTELTraceExportError(error)      { c.exportErrs.Add(1) }
+func (c *countingTracesReporter) OTELTraceSpansDropped(spans int) { c.dropped.Add(int64(spans)) }
 
 func oneSpan() ptrace.Traces {
 	traces := ptrace.NewTraces()
@@ -117,6 +119,8 @@ func TestTracesExportInternalMetrics(t *testing.T) {
 		require.Eventually(t, func() bool { return rep.exportErrs.Load() > 0 }, 5*time.Second, 20*time.Millisecond,
 			"a failed export must increment obi.otel.trace.export.errors")
 		assert.Zero(t, rep.exports.Load(), "a failed export must not increment obi.otel.trace.exports")
+		require.Eventually(t, func() bool { return rep.dropped.Load() == 1 }, 5*time.Second, 20*time.Millisecond,
+			"a permanently failed queued export must count its spans as dropped")
 	})
 
 	t.Run("gRPC successful export is counted", func(t *testing.T) {
