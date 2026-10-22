@@ -102,39 +102,52 @@ func findLanguageFromElf(filePath string) (result svc.InstrumentableType) {
 	return matchExeSymbols(ctx)
 }
 
-func collectSymbols(f *elf.File, syms []elf.Symbol, symbolNames []string, addresses map[string]Sym, types ...elf.SymType) {
+// collectSymbols adds to addresses the symbols of the table of type typ whose name is one of
+// symbolNames and whose type is one of types (STT_FUNC if there is none).
+func collectSymbols(f *elf.File, typ elf.SectionType, symbolNames []string, addresses map[string]Sym, types ...elf.SymType) error {
 	if len(types) == 0 {
 		types = []elf.SymType{elf.STT_FUNC}
 	}
-	for _, s := range syms {
+	err := forEachELFSymbol(f, typ, func(s *elfSymbol) {
 		if !slices.Contains(types, elf.ST_TYPE(s.Info)) {
-			continue
+			return
 		}
-
-		if !slices.Contains(symbolNames, s.Name) {
-			continue
+		name, ok := s.name()
+		if !ok {
+			return
 		}
-
-		addresses[s.Name] = resolveSymbol(f, s)
+		for _, want := range symbolNames {
+			// This comparison does not allocate: only a symbol that matches gets a Go string.
+			if string(name) == want {
+				addresses[want] = resolveSymbol(f, elf.Symbol{
+					Name:  want,
+					Info:  s.Info,
+					Value: s.Value,
+					Size:  s.Size,
+				})
+				return
+			}
+		}
+	})
+	if errors.Is(err, elf.ErrNoSymbols) {
+		return nil
 	}
+	return err
 }
 
 func FindExeSymbols(f *elf.File, symbolNames []string, types ...elf.SymType) (map[string]Sym, error) {
 	addresses := map[string]Sym{}
 
-	syms, err := f.Symbols()
-	if err != nil && !errors.Is(err, elf.ErrNoSymbols) {
+	// The symbol tables of a large C or C++ binary (a database server, a browser) hold hundreds of
+	// thousands of symbols, and this function runs for each group of probes of a binary, so
+	// the tables are streamed and not loaded: see forEachELFSymbol.
+	if err := collectSymbols(f, elf.SHT_SYMTAB, symbolNames, addresses, types...); err != nil {
 		return nil, err
 	}
 
-	collectSymbols(f, syms, symbolNames, addresses, types...)
-
-	dynsyms, err := f.DynamicSymbols()
-	if err != nil && !errors.Is(err, elf.ErrNoSymbols) {
+	if err := collectSymbols(f, elf.SHT_DYNSYM, symbolNames, addresses, types...); err != nil {
 		return nil, err
 	}
-
-	collectSymbols(f, dynsyms, symbolNames, addresses, types...)
 
 	return addresses, nil
 }
