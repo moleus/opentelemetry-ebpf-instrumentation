@@ -4,6 +4,8 @@
 package rules
 
 import (
+	"math"
+	"strconv"
 	"testing"
 	"time"
 
@@ -87,4 +89,50 @@ func TestParse_OwnLimitNeedsNoUntil(t *testing.T) {
 func TestParse_LessThanDefaultNeedsNoUntil(t *testing.T) {
 	_, err := Parse([]byte("default: {ratio: 0.5, errors: true}\nrules: [{ratio: 0.1, errors: true}]"), now)
 	assert.NoError(t, err)
+}
+
+// A malformed rules file must never enable unlimited export.
+func TestCompileRejectsNonFiniteValues(t *testing.T) {
+	bad := []float64{math.NaN(), math.Inf(1), math.Inf(-1)}
+	for _, value := range bad {
+		for _, change := range []struct {
+			name  string
+			apply func(*File)
+		}{
+			{"default ratio", func(f *File) { f.Default.Ratio = value }},
+			{"rule ratio", func(f *File) { f.Rules = []Rule{{Action: Action{Ratio: value}}} }},
+			{"global rate", func(f *File) { f.Limits.SpansPerSecond = value }},
+			{"global burst", func(f *File) { f.Limits.Burst = value }},
+			{"rule rate", func(f *File) { f.Rules = []Rule{{SpansPerSecond: value}} }},
+		} {
+			t.Run(change.name+"/"+strconv.FormatFloat(value, 'g', -1, 64), func(t *testing.T) {
+				f := &File{}
+				change.apply(f)
+				_, err := Compile(f, now)
+				assert.Error(t, err)
+			})
+		}
+	}
+}
+
+func TestParseRejectsAdditionalYAMLDocuments(t *testing.T) {
+	for _, input := range []string{
+		"default: {ratio: 0.01}\n---\ndefault: {ratio: 1}\n",
+		"default: {ratio: 0.01}\n---\n",
+	} {
+		_, err := Parse([]byte(input), now)
+		assert.Error(t, err)
+	}
+}
+
+func TestParseRejectsNonFiniteYAMLValues(t *testing.T) {
+	for _, input := range []string{
+		"default: {ratio: .nan}",
+		"limits: {spans_per_second: .inf}",
+		"limits: {burst: -.inf}",
+		"rules: [{spans_per_second: .nan}]",
+	} {
+		_, err := Parse([]byte(input), now)
+		assert.Error(t, err)
+	}
 }
