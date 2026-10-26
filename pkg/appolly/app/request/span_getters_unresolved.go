@@ -52,6 +52,26 @@ func otelUnresolvedHostGetters(unresolved UnresolvedNames) func(name attr.Name) 
 				}
 				return kv
 			}, true
+		case attr.ClientAddr:
+			return func(s *Span) attribute.KeyValue {
+				kv := getter(s)
+				replacement := unresolved.Incoming
+				if s.IsClientSpan() {
+					replacement = unresolved.Generic
+				}
+				kv.Value = attribute.StringValue(unresolvedValue(kv.Value.AsString(), replacement))
+				return kv
+			}, true
+		case attr.ServerAddr:
+			return func(s *Span) attribute.KeyValue {
+				kv := getter(s)
+				replacement := unresolved.Generic
+				if s.IsClientSpan() {
+					replacement = unresolved.Outgoing
+				}
+				kv.Value = attribute.StringValue(unresolvedValue(kv.Value.AsString(), replacement))
+				return kv
+			}, true
 		case attr.ClientNamespace:
 			return func(s *Span) attribute.KeyValue {
 				kv := getter(s)
@@ -101,6 +121,22 @@ func promUnresolvedHostGetters(unresolved UnresolvedNames) func(name attr.Name) 
 					return unresolvedValue(val, unresolved.Outgoing)
 				}
 				return unresolvedValue(val, unresolved.Generic)
+			}, true
+		case attr.ClientAddr:
+			return func(span *Span) string {
+				replacement := unresolved.Incoming
+				if span.IsClientSpan() {
+					replacement = unresolved.Generic
+				}
+				return unresolvedValue(getter(span), replacement)
+			}, true
+		case attr.ServerAddr:
+			return func(span *Span) string {
+				replacement := unresolved.Generic
+				if span.IsClientSpan() {
+					replacement = unresolved.Outgoing
+				}
+				return unresolvedValue(getter(span), replacement)
 			}, true
 		case attr.ClientNamespace:
 			return func(span *Span) string {
