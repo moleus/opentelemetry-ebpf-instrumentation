@@ -67,17 +67,17 @@ int GUARDED_PROG(obi_handle_buf_with_args, void *, ctx) {
             return 0;
         }
         preempt_guarded_tail_call(ctx, &jump_table, k_tail_protocol_http2);
-    } else if (args->protocols.tcp && is_mysql(&args->pid_conn.conn,
-                                               (const unsigned char *)args->u_buf,
-                                               args->bytes_len,
-                                               &args->protocol_type)) {
-        bpf_dbg_printk("Found mysql connection");
-        preempt_guarded_tail_call(ctx, &jump_table, k_tail_protocol_tcp);
     } else if (args->protocols.tcp && is_postgres(&args->pid_conn.conn,
                                                   (const unsigned char *)args->u_buf,
                                                   args->bytes_len,
                                                   &args->protocol_type)) {
         bpf_dbg_printk("Found postgres connection");
+        preempt_guarded_tail_call(ctx, &jump_table, k_tail_protocol_tcp);
+    } else if (args->protocols.tcp && is_mysql(&args->pid_conn.conn,
+                                               (const unsigned char *)args->u_buf,
+                                               args->bytes_len,
+                                               &args->protocol_type)) {
+        bpf_dbg_printk("Found mysql connection");
         preempt_guarded_tail_call(ctx, &jump_table, k_tail_protocol_tcp);
     } else if (args->protocols.tcp && is_mssql(&args->pid_conn.conn,
                                                (const unsigned char *)args->u_buf,

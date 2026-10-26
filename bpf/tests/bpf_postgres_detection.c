@@ -55,8 +55,9 @@ enum protocol_type {
 #define __always_inline inline
 #endif
 
-static void bpf_probe_read(void *dst, u32 size, const void *src) {
+static int bpf_probe_read(void *dst, u32 size, const void *src) {
     memcpy(dst, src, size);
+    return 0;
 }
 
 #define bpf_ntohl(x) ntohl(x)
@@ -150,13 +151,26 @@ static __always_inline u8 is_postgres(connection_info_t *conn_info,
         message_size += full_message_size;
 
         switch (hdr.message_type) {
-        case k_pg_msg_query:
+        case k_pg_msg_query: {
+            u8 terminator = 1;
+            if (hdr.message_len < 5 ||
+                bpf_probe_read(&terminator, sizeof(terminator), data + message_size - 1) != 0 ||
+                terminator != 0) {
+                malformed = true;
+                break;
+            }
+            includes_known_command = true;
+            break;
+        }
         case k_pg_msg_parse:
         case k_pg_msg_bind:
         case k_pg_msg_execute:
             includes_known_command = true;
             break;
         default:
+            break;
+        }
+        if (malformed) {
             break;
         }
     }
@@ -200,6 +214,9 @@ static u32 put_msg(unsigned char *buf, u32 *off, u8 type, u32 body_len) {
     memcpy(buf + *off + 1, &be, sizeof(be));
     for (u32 i = 0; i < body_len; i++) {
         buf[*off + k_pg_hdr_size + i] = (unsigned char)('a' + (i % 26));
+    }
+    if (type == k_pg_msg_query && body_len > 0) {
+        buf[*off + k_pg_hdr_size + body_len - 1] = '\0';
     }
     u32 total = k_pg_hdr_size + body_len;
     *off += total;
@@ -250,6 +267,23 @@ static void test_trailing_partial_message(void) {
     memcpy(buf + off + 1, &be, sizeof(be));
     off += k_pg_hdr_size + 8; // include only 8 bytes of the partial Bind body
     check("trailing message split across segments", 1, classify(buf, off));
+}
+
+static void test_query_without_terminator_rejected(void) {
+    unsigned char buf[85] = {0};
+    u32 off = 0;
+    put_msg(buf, &off, k_pg_msg_query, 18);
+    put_msg(buf, &off, k_pg_msg_query, 18);
+    put_msg(buf, &off, k_pg_msg_query, 18);
+    put_msg(buf, &off, k_pg_msg_query, 11);
+    check("PG complete Query with zero terminator", 1, classify(buf, off));
+    // The initial bytes also mimic a MySQL COM_STMT_PREPARE packet.
+    if (off != 85 || buf[4] != 0x16) {
+        fprintf(stderr, "invalid collision fixture\n");
+        failures++;
+    }
+    buf[22] = 'x';
+    check("MySQL-like Q packet without terminator", 0, classify(buf, off));
 }
 
 static void test_http_post_rejected(void) {
@@ -313,6 +347,7 @@ int main(void) {
     test_extended_protocol_multi_message();
     test_more_than_loop_limit();
     test_trailing_partial_message();
+    test_query_without_terminator_rejected();
     test_http_post_rejected();
     test_startup_message_rejected();
     test_response_only_segment_rejected();
