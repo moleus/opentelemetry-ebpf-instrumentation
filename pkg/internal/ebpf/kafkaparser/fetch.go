@@ -162,20 +162,20 @@ func parseFetchTopic(r *largebuf.LargeBufferReader, header KafkaRequestHeader) (
 		// if we fail to read Partition count, we can still return the topic
 		return &topic, nil
 	}
-	// Walk every partition so the reader stays aligned for the next topic. We only
-	// keep the first partition for the span, but each entry MUST be fully consumed
-	// (including its trailing fields and per-partition tagged fields); otherwise a
-	// multi-topic Fetch request mis-parses every topic after the first.
+	// Walk every partition so the reader stays aligned for the next topic. A
+	// Fetch request can ask for several partitions of one topic. Do not claim
+	// that such a network poll targets only its first partition in telemetry.
+	// Every entry MUST still be fully consumed to read subsequent topics.
 	for i := range partitionCount {
 		partition, fetchOffset, perr := parseFetchPartition(r, header)
 		if perr != nil {
 			// if we fail to parse a Partition, we can still return the topic
 			return &topic, nil
 		}
-		// Only the first partition is kept for the span; the rest are parsed
-		// solely to advance the reader (a topic can have many partitions, e.g. 47),
-		// so allocate a FetchPartition for the first entry only.
-		if i == 0 {
+		// Only a single-partition Fetch can be attributed to one partition.
+		// Multi-partition requests omit partition.id rather than reporting an
+		// arbitrary first partition as if it represented the full request.
+		if i == 0 && partitionCount == 1 {
 			topic.Partition = &FetchPartition{
 				Partition:   partition,
 				FetchOffset: fetchOffset,
