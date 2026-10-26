@@ -33,7 +33,10 @@ const unknownTopicName = "*"
 
 type PartitionInfo struct {
 	Partition int
-	Offset    int64
+	// Offset is the *requested FetchOffset* from a Kafka FetchRequest, not
+	// the offset of a received or processed Kafka record. It must not be
+	// exported as messaging.kafka.offset.
+	Offset int64
 }
 
 type KafkaInfo struct {
@@ -51,7 +54,9 @@ func (k Operation) String() string {
 	case Produce:
 		return request.MessagingSend
 	case Fetch:
-		return request.MessagingProcess
+		// A FetchRequest is a network poll. OBI cannot observe application
+		// processing or count the records returned by the broker here.
+		return request.MessagingReceive
 	default:
 		return "unknown"
 	}
@@ -247,7 +252,9 @@ func kafkaMessagingInfo(data *KafkaInfo) *request.MessagingInfo {
 	if data.PartitionInfo != nil {
 		info.HasPartition = true
 		info.Partition = data.PartitionInfo.Partition
-		info.Offset = data.PartitionInfo.Offset
+		// Intentionally do not set MessagingInfo.Offset. A FetchRequest
+		// holds the consumer's requested starting offset, not a record offset.
+		// The receive span must not publish messaging.kafka.offset.
 	}
 	return info
 }

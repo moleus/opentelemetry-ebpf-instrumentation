@@ -638,7 +638,7 @@ func TestTCPToKafkaToSpanConsumerGroup(t *testing.T) {
 	require.NotNil(t, span.MessagingInfo)
 	assert.True(t, span.MessagingInfo.HasPartition)
 	assert.Equal(t, 3, span.MessagingInfo.Partition)
-	assert.Equal(t, int64(42), span.MessagingInfo.Offset)
+	assert.Zero(t, span.MessagingInfo.Offset, "a requested FetchOffset is not a record offset")
 
 	// nothing known: no MessagingInfo, so no partition "0" is ever fabricated
 	span = TCPToKafkaToSpan(event, &KafkaInfo{Operation: Fetch, Topic: "orders"})
@@ -1305,4 +1305,27 @@ func TestKafkaConsumerGroupsTopicBudget(t *testing.T) {
 	groups.Enrich(proc, &kafkaparser.GroupRequest{GroupID: "group", MemberID: fmt.Sprintf("member-%d", members-1), Topics: topics("commit", 10)}, nil)
 	assert.Equal(t, maxTopicsPerProcess-maxTopicsPerMember+24+10, kept())
 	assert.Equal(t, "group", groups.Lookup(proc, "commit-9"))
+}
+
+// A Kafka FetchRequest is a network poll, not a record-processing callback.
+// Its requested FetchOffset must never become messaging.kafka.offset.
+func TestKafkaFetchSpanIsReceiveNotProcess(t *testing.T) {
+	infos, ignored, err := ProcessKafkaEvent(
+		largebuf.NewLargeBufferFrom(fetchOrders), nil, nil, nil, KafkaProcess{}, BpfConnectionInfoT{},
+	)
+	require.NoError(t, err)
+	assert.False(t, ignored)
+	require.Len(t, infos, 1)
+	require.Equal(t, Fetch, infos[0].Operation)
+	require.NotNil(t, infos[0].PartitionInfo)
+	require.Equal(t, int64(19), infos[0].PartitionInfo.Offset, "the request asks to start fetching at offset 19")
+
+	span := TCPToKafkaToSpan(&TCPRequestInfo{Direction: directionSend}, infos[0])
+	assert.Equal(t, request.MessagingReceive, span.Method)
+	assert.Equal(t, "SPAN_KIND_CLIENT", span.ServiceGraphKind())
+	require.NotNil(t, span.MessagingInfo)
+	assert.True(t, span.MessagingInfo.HasPartition)
+	assert.Equal(t, 0, span.MessagingInfo.Partition)
+	assert.Zero(t, span.MessagingInfo.Offset, "FetchOffset must not be represented as a message offset")
+	assert.NotEqual(t, request.MessagingProcess, span.Method)
 }
