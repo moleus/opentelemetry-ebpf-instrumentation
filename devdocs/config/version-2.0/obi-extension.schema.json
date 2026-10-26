@@ -2233,6 +2233,12 @@
                   ],
                   "default": "autodetect",
                   "description": "Kubernetes enricher activation mode.\n`autodetect`: enable if a Kubernetes environment is detected (default).\n`enabled`: always enable.\n`disabled`: disable. Recommended when running as a Collector receiver and using `k8sattributesprocessor`.\nIf omitted, `autodetect` is used.\n"
+                },
+                "pod_event_queue_size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "default": 1024,
+                  "description": "Maximum number of pending Kubernetes pod events in each OBI event queue. When full, new events are dropped.\n"
                 }
               }
             },

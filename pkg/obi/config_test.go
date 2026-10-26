@@ -359,6 +359,7 @@ discovery:
 			Kubernetes: transform.KubernetesDecorator{
 				KubeconfigPath:           "/foo/bar",
 				Enable:                   kubeflags.EnabledTrue,
+				PodEventQueueSize:        transform.DefaultPodEventQueueSize,
 				InformersSyncTimeout:     30 * time.Second,
 				ReconnectInitialInterval: 5 * time.Second,
 				InformersResyncPeriod:    30 * time.Minute,

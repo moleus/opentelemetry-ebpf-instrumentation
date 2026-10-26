@@ -393,6 +393,7 @@ extensions:
                 kubernetes:
                     mode: autodetect
                     cluster_name: ""
+                    pod_event_queue_size: 1024
                     service_name_template: ""
                     auth:
                         kubeconfig_path: ""

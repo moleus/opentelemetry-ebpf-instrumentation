@@ -583,6 +583,8 @@ extensions:
           # Receiver configurations must omit enrich entirely and use Collector processors.
           mode: autodetect
           cluster_name: ""
+          # Maximum pending pod metadata events in each queue; new events are dropped when full.
+          pod_event_queue_size: 1024
           auth:
             kubeconfig_path: ""
           # Informer cache/sync controls.

@@ -36,6 +36,7 @@ type InternalMetrics struct {
 	QueueLength              Name
 	LargeBufferDroppedBytes  Name
 	TraceSpansDropped        Name
+	KubePodEventsDropped     Name
 }
 
 func NewInternalMetrics(prefix string) InternalMetrics {
@@ -132,6 +133,11 @@ func NewInternalMetrics(prefix string) InternalMetrics {
 		}),
 		TraceSpansDropped: metric(Name{
 			OTEL: prefix + ".otel.trace.spans.dropped",
+			Unit: "1",
+			Type: InstrumentCounter,
+		}),
+		KubePodEventsDropped: metric(Name{
+			OTEL: prefix + ".kube.pod.events.dropped",
 			Unit: "1",
 			Type: InstrumentCounter,
 		}),

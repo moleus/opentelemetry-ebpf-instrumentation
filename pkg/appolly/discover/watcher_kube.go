@@ -9,9 +9,12 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/services"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	"go.opentelemetry.io/obi/pkg/internal/helpers/container"
 	isync "go.opentelemetry.io/obi/pkg/internal/helpers/sync"
 	ikube "go.opentelemetry.io/obi/pkg/internal/kube"
@@ -33,6 +36,8 @@ var errWatcherKubeEnricherStopped = errors.New("watcher kube enricher stopped")
 // gets back to its other sources.
 const podEventsBatchSize = 64
 
+const podEventDropLogInterval = time.Minute
+
 // watcherKubeEnricher keeps an update relational snapshot of the in-host process-pods-deployments,
 // which is continuously updated from two sources: the input from the ProcessWatcher and the kube.Store.
 type watcherKubeEnricher struct {
@@ -53,9 +58,12 @@ type watcherKubeEnricher struct {
 	// podEventsReady signals enrich that podEvents has new events
 	podEventsReady chan struct{}
 	// done is closed when enrich returns, so On stops accepting events
-	done   chan struct{}
-	output *msg.Queue[[]Event[ProcessAttrs]]
-	input  <-chan []Event[ProcessAttrs]
+	done                chan struct{}
+	output              *msg.Queue[[]Event[ProcessAttrs]]
+	input               <-chan []Event[ProcessAttrs]
+	metrics             imetrics.Reporter
+	podEventQueueSize   int
+	lastDropLogUnixNano atomic.Int64
 }
 
 // kubeMetadataProvider abstracts kube.MetadataProvider for easier dependency
@@ -67,6 +75,8 @@ type kubeMetadataProvider interface {
 
 func WatcherKubeEnricherProvider(
 	kubeMetaProvider kubeMetadataProvider,
+	podEventQueueSize int,
+	metrics imetrics.Reporter,
 	input, output *msg.Queue[[]Event[ProcessAttrs]],
 ) swarm.InstanceFunc {
 	return func(ctx context.Context) (swarm.RunFunc, error) {
@@ -77,7 +87,7 @@ func WatcherKubeEnricherProvider(
 		if err != nil {
 			return nil, fmt.Errorf("instantiating WatcherKubeEnricher: %w", err)
 		}
-		wk := newWatcherKubeEnricher(store, input.Subscribe(msg.SubscriberName("WatcherKubeEnricher")), output)
+		wk := newWatcherKubeEnricher(store, input.Subscribe(msg.SubscriberName("WatcherKubeEnricher")), output, podEventQueueSize, metrics)
 		return wk.enrich, nil
 	}
 }
@@ -86,18 +96,23 @@ func newWatcherKubeEnricher(
 	store *kube.Store,
 	input <-chan []Event[ProcessAttrs],
 	output *msg.Queue[[]Event[ProcessAttrs]],
+	queueSize int,
+	metrics imetrics.Reporter,
 ) *watcherKubeEnricher {
+	queueSize = transform.EffectivePodEventQueueSize(queueSize)
 	return &watcherKubeEnricher{
 		log:                 slog.With("component", "discover.watcherKubeEnricher"),
 		store:               store,
 		containerByPID:      map[app.PID]container.Info{},
 		processByContainer:  map[string][]ProcessAttrs{},
 		unknownCgroupWarned: map[app.PID]struct{}{},
-		podEvents:           isync.NewQueue[Event[*informer.ObjectMeta]](),
+		podEvents:           isync.NewBoundedQueue[Event[*informer.ObjectMeta]](queueSize),
 		podEventsReady:      make(chan struct{}, 1),
 		done:                make(chan struct{}),
 		input:               input,
 		output:              output,
+		metrics:             metrics,
+		podEventQueueSize:   queueSize,
 	}
 }
 
@@ -129,8 +144,21 @@ func (wk *watcherKubeEnricher) On(event *informer.Event) error {
 }
 
 func (wk *watcherKubeEnricher) enqueuePodEvent(podEvent Event[*informer.ObjectMeta]) {
-	wk.podEvents.Enqueue(podEvent)
+	if !wk.podEvents.TryEnqueue(podEvent) {
+		imetrics.ReportKubePodEventsDropped(wk.metrics, "discovery")
+		wk.logPodEventDrop()
+		return
+	}
 	wk.signalPodEvents()
+}
+
+func (wk *watcherKubeEnricher) logPodEventDrop() {
+	now := time.Now().UnixNano()
+	previous := wk.lastDropLogUnixNano.Load()
+	if now-previous < int64(podEventDropLogInterval) || !wk.lastDropLogUnixNano.CompareAndSwap(previous, now) {
+		return
+	}
+	wk.log.Warn("dropping Kubernetes Pod event because the queue is full", "queue_capacity", wk.podEventQueueSize)
 }
 
 func (wk *watcherKubeEnricher) signalPodEvents() {

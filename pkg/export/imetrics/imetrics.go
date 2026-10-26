@@ -125,6 +125,13 @@ func IsBuiltinNoopReporter(reporter Reporter) bool {
 	}
 }
 
+// ReportKubePodEventsDropped records a dropped Pod event when the configured reporter supports it.
+func ReportKubePodEventsDropped(reporter Reporter, queue string) {
+	if dropReporter, ok := reporter.(interface{ KubePodEventsDropped(string) }); ok {
+		dropReporter.KubePodEventsDropped(queue)
+	}
+}
+
 // NoopReporter is a metrics Reporter that just does nothing
 type NoopReporter struct{}
 
@@ -149,3 +156,4 @@ func (n NoopReporter) BPFPacketStats(_, _ uint64)                               
 func (n NoopReporter) BPFRingbufWriteCounts(_ string, _, _ uint64)                             {}
 func (n NoopReporter) QueueBufferUtilization(_ string, _ float64)                              {}
 func (n NoopReporter) LargeBufferDroppedBytes(_ uint64)                                        {}
+func (n NoopReporter) KubePodEventsDropped(_ string)                                           {}

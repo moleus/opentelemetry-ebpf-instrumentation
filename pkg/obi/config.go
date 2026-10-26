@@ -311,6 +311,7 @@ var DefaultConfig = Config{
 		},
 		Kubernetes: transform.KubernetesDecorator{
 			Enable:                   kubeflags.EnabledDefault,
+			PodEventQueueSize:        transform.DefaultPodEventQueueSize,
 			InformersSyncTimeout:     30 * time.Second,
 			ReconnectInitialInterval: 5 * time.Second,
 			InformersResyncPeriod:    30 * time.Minute,
