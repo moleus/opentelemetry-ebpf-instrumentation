@@ -17,9 +17,11 @@ import (
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/ebpf/ringbuf"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/amqpparser"
+	"go.opentelemetry.io/obi/pkg/internal/ebpf/cqlparser"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/kafkaparser"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/mqttparser"
 	"go.opentelemetry.io/obi/pkg/internal/largebuf"
+	"go.opentelemetry.io/obi/pkg/internal/sqlprune"
 )
 
 var (
@@ -222,8 +224,12 @@ func dispatchMSSQL(parseCtx *EBPFParseContext, event *TCPRequestInfo, requestBuf
 }
 
 // detectGenericProtocol runs deterministic protocol detection for unclassified events:
-// SQL, FastCGI, MongoDB, Couchbase, and Memcached noreply.
+// CQL, SQL, FastCGI, MongoDB, Couchbase, and Memcached noreply.
 func detectGenericProtocol(parseCtx *EBPFParseContext, cfg *config.EBPFTracer, event *TCPRequestInfo, requestBuffer, responseBuffer *largebuf.LargeBuffer) (request.Span, bool, bool, error) {
+	if span, ignore, matched, err := matchCQL(event, requestBuffer, responseBuffer); matched {
+		return span, ignore, matched, err
+	}
+
 	if span, ignore, matched, err := matchSQL(parseCtx, cfg, event, requestBuffer, responseBuffer); matched {
 		return span, ignore, matched, err
 	}
@@ -245,6 +251,53 @@ func detectGenericProtocol(parseCtx *EBPFParseContext, cfg *config.EBPFTracer, e
 	}
 
 	return request.Span{}, false, false, nil
+}
+
+// matchCQL gives Cassandra native frames precedence over SQL heuristics.
+// It emits a duration only if the generic TCP tracker happened to pair two
+// complete, uncompressed CQL frames with the same stream ID. It cannot follow
+// multiple in-flight streams on one TCP connection; unmatched cases are dropped
+// rather than creating fabricated SQL spans or incorrect latency measurements.
+func matchCQL(event *TCPRequestInfo, reqBuffer, respBuffer *largebuf.LargeBuffer) (request.Span, bool, bool, error) {
+	reqBytes, respBytes := reqBuffer.UnsafeView(), respBuffer.UnsafeView()
+	reqLike, respLike := cqlparser.LooksLikeHeader(reqBytes), cqlparser.LooksLikeHeader(respBytes)
+	if !reqLike && !respLike {
+		return request.Span{}, false, false, nil
+	}
+
+	req, reqOK := cqlparser.ParseFrame(reqBytes)
+	resp, respOK := cqlparser.ParseFrame(respBytes)
+	reversed := false
+	if reqOK && req.Response && respOK && !resp.Response {
+		req, resp = resp, req
+		reversed = true
+	}
+	if !reqOK || !respOK || !cqlparser.PairedResponse(req, resp) {
+		return request.Span{}, true, true, nil
+	}
+	op, text, ok := cqlparser.Operation(req)
+	if !ok {
+		return request.Span{}, true, true, nil
+	}
+	var tables []string
+	if text != "" {
+		sqlOp, sqlTables := sqlprune.SQLParseOperationAndTables(text)
+		if sqlOp == "" || cqlparser.QueryOperation(text) == "" {
+			return request.Span{}, true, true, nil
+		}
+		tables = sqlTables
+		if op == "QUERY" {
+			op = sqlOp
+		}
+	}
+	if reversed {
+		reverseTCPEvent(event)
+	}
+	span := TCPToSQLToSpan(event, op, tables, text, request.DBCassandra, "", nil)
+	if resp.Opcode == 0x00 { // CQL ERROR, response code is a 32-bit value
+		span.Status = 1
+	}
+	return span, false, true, nil
 }
 
 // caches the connection's database name for the SQL spans that follow
