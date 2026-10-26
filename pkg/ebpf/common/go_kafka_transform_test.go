@@ -25,8 +25,8 @@ func TestReadGoKafkaGoRequestIntoSpanOperation(t *testing.T) {
 		{
 			name:     "fetch",
 			apiKey:   kafkaGoAPIFetch,
-			method:   request.MessagingProcess,
-			spanKind: "SPAN_KIND_CONSUMER",
+			method:   request.MessagingReceive,
+			spanKind: "SPAN_KIND_CLIENT",
 		},
 		{
 			name:     "produce",
