@@ -1522,44 +1522,49 @@ func TestMakeOtelBPFFSPathRejectsInaccessibleExistingDirectory(t *testing.T) {
 	require.ErrorContains(t, err, "accessing bpffs otel path")
 }
 
+// countingReaderAt counts the reads of a file, to tell how many times its symbol tables are scanned.
+type countingReaderAt struct {
+	r     io.ReaderAt
+	reads int
+}
+
+func (c *countingReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	c.reads++
+	return c.r.ReadAt(p, off)
+}
+
+func probeGroupsForLookup() []probeDescMap {
+	return []probeDescMap{
+		makeProbeDescMap(expectedValues()),
+		{"setprogname": {{}}, "no_such_symbol": {{}}},
+		{"setprogname": {{}}, "other_no_symbol": {{}}},
+	}
+}
+
 // All groups of probes of a module are resolved by one lookup. Each group must get what a lookup
-// of its own names gives, also when two groups ask for overlapping substrings.
+// of its own names gives.
 func TestFindProbeSymbolsOneLookupForManyGroups(t *testing.T) {
 	elfFile, err := elf.NewFile(bytes.NewReader(testData()))
 	require.NoError(t, err)
 	defer elfFile.Close()
 
-	newGroups := func() []probeDescMap {
-		groupA := makeProbeDescMap(expectedValues())
-		groupB := probeDescMap{
-			"setprog":        {{SymbolMatcher: ebpfcommon.SymbolMatcherContains}},
-			"setprogname":    {{SymbolMatcher: ebpfcommon.SymbolMatcherExact}},
-			"no_such_symbol": {{}},
-		}
-		groupC := probeDescMap{
-			"progname": {{SymbolMatcher: ebpfcommon.SymbolMatcherContains}},
-			"setprog":  {{SymbolMatcher: ebpfcommon.SymbolMatcherContains}},
-		}
-		return []probeDescMap{groupA, groupB, groupC}
-	}
-
 	// reference: a lookup for each group
-	separate := newGroups()
+	separate := probeGroupsForLookup()
 	var separateErrs []error
 	for _, g := range separate {
 		separateErrs = append(separateErrs, gatherOffsetsImpl(elfFile, g, "libbsd.so", slog.Default()))
 	}
 
 	// one lookup for all groups
-	together := newGroups()
+	together := probeGroupsForLookup()
 	var all []map[string][]*ebpfcommon.ProbeDesc
 	for _, g := range together {
 		all = append(all, g)
 	}
-	exact, substr, err := findProbeSymbols(elfFile, all, "libbsd.so")
+	syms, err := findProbeSymbols(elfFile, all, "libbsd.so")
 	require.NoError(t, err)
 	for i, g := range together {
-		assert.Equal(t, separateErrs[i], applyProbeSymbols(exact, substr, g, "libbsd.so", slog.Default()), "group %d", i)
+		assert.Equal(t, separateErrs[i], applyProbeSymbols(syms, g, "libbsd.so", slog.Default()), "group %d", i)
 		for name, descs := range g {
 			for j, d := range descs {
 				ref := separate[i][name][j]
@@ -1569,4 +1574,36 @@ func TestFindProbeSymbolsOneLookupForManyGroups(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The file is scanned once for any count of groups of probes. The count of reads of the file is
+// the count of scans: the tables are read in a stream, whatever the names are.
+func TestFindProbeSymbolsScansOnce(t *testing.T) {
+	scans := func(groups []map[string][]*ebpfcommon.ProbeDesc) int {
+		cr := &countingReaderAt{r: bytes.NewReader(testData())}
+		elfFile, err := elf.NewFile(cr)
+		require.NoError(t, err)
+		defer elfFile.Close()
+
+		cr.reads = 0 // the headers of the sections were read by NewFile
+		_, err = findProbeSymbols(elfFile, groups, "libbsd.so")
+		require.NoError(t, err)
+		return cr.reads
+	}
+
+	var groups []map[string][]*ebpfcommon.ProbeDesc
+	for _, g := range probeGroupsForLookup() {
+		groups = append(groups, g)
+	}
+
+	oneScan := scans(groups[:1])
+	require.Positive(t, oneScan, "a lookup reads the symbol tables")
+
+	assert.Equal(t, oneScan, scans(groups), "all groups: one scan")
+
+	separately := 0
+	for _, g := range groups {
+		separately += scans([]map[string][]*ebpfcommon.ProbeDesc{g})
+	}
+	assert.Equal(t, len(groups)*oneScan, separately, "a lookup for each group: one scan for each")
 }

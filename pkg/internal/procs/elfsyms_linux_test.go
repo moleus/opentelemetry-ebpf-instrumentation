@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,45 +27,33 @@ import (
 // referenceFindExeSymbols is the lookup as it was before the tables were streamed: it loads both
 // tables with the standard library. The streaming lookup must return the same result and the
 // same errors: any error but elf.ErrNoSymbols is returned.
-func referenceFindExeSymbols(t testing.TB, f *elf.File, names, substrings []string, types ...elf.SymType) (map[string]Sym, map[string]Sym, error) {
+func referenceFindExeSymbols(t testing.TB, f *elf.File, names []string, types ...elf.SymType) (map[string]Sym, error) {
 	t.Helper()
 	if len(types) == 0 {
 		types = []elf.SymType{elf.STT_FUNC}
 	}
 	exact := map[string]Sym{}
-	sub := map[string]Sym{}
 	collect := func(syms []elf.Symbol) {
 		for _, s := range syms {
-			isWanted := false
-			for _, ty := range types {
-				isWanted = isWanted || ty == elf.ST_TYPE(s.Info)
-			}
-			if !isWanted {
+			if !slices.Contains(types, elf.ST_TYPE(s.Info)) {
 				continue
 			}
-			for _, n := range names {
-				if s.Name == n {
-					exact[n] = resolveSymbol(f, s)
-				}
-			}
-			for _, n := range substrings {
-				if strings.Contains(s.Name, n) {
-					sub[n] = resolveSymbol(f, s)
-				}
+			if slices.Contains(names, s.Name) {
+				exact[s.Name] = resolveSymbol(f, s)
 			}
 		}
 	}
 	syms, err := f.Symbols()
 	if err != nil && !errors.Is(err, elf.ErrNoSymbols) {
-		return nil, nil, err
+		return nil, err
 	}
 	collect(syms)
 	dyn, err := f.DynamicSymbols()
 	if err != nil && !errors.Is(err, elf.ErrNoSymbols) {
-		return nil, nil, err
+		return nil, err
 	}
 	collect(dyn)
-	return exact, sub, nil
+	return exact, nil
 }
 
 // openSelf opens a Go executable that has a symbol table: the test binary is stripped in some
@@ -99,15 +88,13 @@ func TestFindExeSymbolsMatchesStandardLibrary(t *testing.T) {
 		}
 	}
 	names = append(names, "no.such.symbol", "")
-	substrings := []string{"TestFindExeSymbols", "runtime.mallocgc", "no.such.substring"}
 
 	for _, types := range [][]elf.SymType{nil, {elf.STT_OBJECT}, {elf.STT_FUNC, elf.STT_OBJECT}} {
-		wantExact, wantSub, err := referenceFindExeSymbols(t, f, names, substrings, types...)
+		want, err := referenceFindExeSymbols(t, f, names, types...)
 		require.NoError(t, err)
-		gotExact, gotSub, err := FindExeSymbolsByNameAndSubstring(f, names, substrings, types...)
+		got, err := FindExeSymbols(f, names, types...)
 		require.NoError(t, err)
-		assert.Equal(t, wantExact, gotExact, "exact, types %v", types)
-		assert.Equal(t, wantSub, gotSub, "substring, types %v", types)
+		assert.Equal(t, want, got, "types %v", types)
 	}
 }
 
@@ -126,13 +113,12 @@ func TestFindExeSymbolsDynamicTable(t *testing.T) {
 		for _, s := range dyn {
 			names = append(names, s.Name)
 		}
-		wantExact, wantSub, err := referenceFindExeSymbols(t, f, names, []string{"mem", "str"})
+		want, err := referenceFindExeSymbols(t, f, names)
 		require.NoError(t, err)
-		gotExact, gotSub, err := FindExeSymbolsByNameAndSubstring(f, names, []string{"mem", "str"})
+		got, err := FindExeSymbols(f, names)
 		_ = f.Close()
 		require.NoError(t, err)
-		assert.Equal(t, wantExact, gotExact, path)
-		assert.Equal(t, wantSub, gotSub, path)
+		assert.Equal(t, want, got, path)
 		return
 	}
 	t.Skip("no dynamically linked executable found")
@@ -158,9 +144,9 @@ func TestFindExeSymbolsAllocatesLittle(t *testing.T) {
 	}
 
 	names := []string{"runtime.mallocgc"}
-	oldBytes := measure(func() { _, _, _ = referenceFindExeSymbols(t, f, names, nil) })
+	oldBytes := measure(func() { _, _ = referenceFindExeSymbols(t, f, names) })
 	newBytes := measure(func() {
-		_, _, err := FindExeSymbolsByNameAndSubstring(f, names, nil)
+		_, err := FindExeSymbols(f, names)
 		require.NoError(t, err)
 	})
 	t.Logf("tables %d bytes, standard library lookup allocated %d, streaming lookup %d", tableBytes, oldBytes, newBytes)
@@ -332,10 +318,10 @@ func TestFindExeSymbolsStringTableReadError(t *testing.T) {
 			if f == nil {
 				t.Skip("no executable with a " + tc.section + " section found")
 			}
-			_, _, wantErr := referenceFindExeSymbols(t, f, []string{"runtime.mallocgc", "malloc"}, []string{"mem"})
+			_, wantErr := referenceFindExeSymbols(t, f, []string{"runtime.mallocgc", "malloc"})
 			require.Error(t, wantErr, "the standard library fails")
 
-			_, _, err := FindExeSymbolsByNameAndSubstring(f, []string{"runtime.mallocgc", "malloc"}, []string{"mem"})
+			_, err := FindExeSymbols(f, []string{"runtime.mallocgc", "malloc"})
 			require.Error(t, err)
 			assert.ErrorIs(t, err, errInjected)
 		})
@@ -439,13 +425,12 @@ func TestFindExeSymbolsELFFormats(t *testing.T) {
 					f, err := elf.NewFile(bytes.NewReader(data))
 					require.NoError(t, err)
 					names := []string{"sym_0", "sym_1023", "sym_1024", "sym_2052", "sym_9999"}
-					wantExact, wantSub, wantErr := referenceFindExeSymbols(t, f, names, []string{"sym_20"})
+					want, wantErr := referenceFindExeSymbols(t, f, names)
 					require.NoError(t, wantErr)
-					require.Len(t, wantExact, 4)
-					gotExact, gotSub, err := FindExeSymbolsByNameAndSubstring(f, names, []string{"sym_20"})
+					require.Len(t, want, 4)
+					got, err := FindExeSymbols(f, names)
 					require.NoError(t, err)
-					assert.Equal(t, wantExact, gotExact)
-					assert.Equal(t, wantSub, gotSub)
+					assert.Equal(t, want, got)
 				})
 			}
 		}
@@ -458,24 +443,56 @@ func TestForEachELFSymbolNoTable(t *testing.T) {
 	assert.ErrorIs(t, err, elf.ErrNoSymbols)
 }
 
-// The result for a substring must not depend on the other substrings of the same lookup, as
-// a lookup serves several groups of probes at once.
-func TestFindExeSymbolsOverlappingSubstrings(t *testing.T) {
+// The result for a name must not depend on the other names of the same lookup, as a lookup
+// serves several groups of probes at once.
+func TestFindExeSymbolsIndependentOfOtherNames(t *testing.T) {
 	f := openSelf(t)
 
-	_, subA, err := FindExeSymbolsByNameAndSubstring(f, nil, []string{"runtime.mallocgc"})
+	only, err := FindExeSymbols(f, []string{"runtime.mallocgc"})
 	require.NoError(t, err)
-	_, subB, err := FindExeSymbolsByNameAndSubstring(f, nil, []string{"mallocgc"})
-	require.NoError(t, err)
-	_, both1, err := FindExeSymbolsByNameAndSubstring(f, nil, []string{"runtime.mallocgc", "mallocgc"})
-	require.NoError(t, err)
-	_, both2, err := FindExeSymbolsByNameAndSubstring(f, nil, []string{"mallocgc", "runtime.mallocgc"})
-	require.NoError(t, err)
-
-	require.NotEmpty(t, subA)
-	require.NotEmpty(t, subB)
-	for _, both := range []map[string]Sym{both1, both2} {
-		assert.Equal(t, subA["runtime.mallocgc"], both["runtime.mallocgc"])
-		assert.Equal(t, subB["mallocgc"], both["mallocgc"])
+	require.Contains(t, only, "runtime.mallocgc")
+	for _, names := range [][]string{
+		{"runtime.mallocgc", "runtime.newobject", "no.such.symbol"},
+		{"no.such.symbol", "runtime.newobject", "runtime.mallocgc", "runtime.mallocgc"},
+	} {
+		got, err := FindExeSymbols(f, names)
+		require.NoError(t, err)
+		assert.Equal(t, only["runtime.mallocgc"], got["runtime.mallocgc"], "names %v", names)
+		assert.NotContains(t, got, "no.such.symbol")
 	}
+}
+
+// countReads counts the reads of the file.
+type countReads struct {
+	r     io.ReaderAt
+	reads int
+}
+
+func (c *countReads) ReadAt(p []byte, off int64) (int, error) {
+	c.reads++
+	return c.r.ReadAt(p, off)
+}
+
+// A lookup scans each table once, however many names it gets: the count of reads does not grow
+// with the count of names.
+func TestFindExeSymbolsOneScanForManyNames(t *testing.T) {
+	data := elfFixture(t, elf.ELFCLASS64, binary.LittleEndian, false, symChunkEntries*3+7)
+	reads := func(names []string) int {
+		c := &countReads{r: bytes.NewReader(data)}
+		f, err := elf.NewFile(c)
+		require.NoError(t, err)
+		c.reads = 0
+		got, err := FindExeSymbols(f, names)
+		require.NoError(t, err)
+		assert.Len(t, got, len(names))
+		return c.reads
+	}
+
+	var many []string
+	for i := range 500 {
+		many = append(many, fmt.Sprintf("sym_%d", i*6))
+	}
+	one := reads(many[:1])
+	require.Positive(t, one)
+	assert.Equal(t, one, reads(many))
 }
