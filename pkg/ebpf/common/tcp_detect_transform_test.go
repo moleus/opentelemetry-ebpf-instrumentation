@@ -376,7 +376,7 @@ func TestTCPReqKafkaParsing(t *testing.T) {
 	assert.NotEmpty(t, s.Peer)
 	assert.Equal(t, 8080, s.HostPort)
 	assert.Greater(t, s.End, s.Start)
-	assert.Equal(t, "process", s.Method)
+	assert.Equal(t, "receive", s.Method)
 	assert.Equal(t, "important", s.Path)
 	assert.Equal(t, "sarama", s.Statement)
 	assert.Equal(t, request.EventTypeKafkaClient, s.Type)
