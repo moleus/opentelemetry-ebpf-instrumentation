@@ -106,6 +106,7 @@ const (
 	DBPostgres
 	DBMySQL
 	DBMSSQL
+	DBCassandra
 )
 
 const (
@@ -2504,6 +2505,8 @@ func (s *Span) DBSystemName() attribute.KeyValue {
 			return semconv.DBSystemNameMySQL
 		case int(DBMSSQL):
 			return semconv.DBSystemNameMicrosoftSQLServer
+		case int(DBCassandra):
+			return DBSystemName("cassandra")
 		}
 	}
 
