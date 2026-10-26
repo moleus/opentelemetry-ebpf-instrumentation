@@ -16,6 +16,7 @@
 
 #include <generictracer/maps/protocol_cache.h>
 #include <generictracer/protocol_common.h>
+#include <generictracer/protocol_mssql_signature.h>
 
 // TDS Packet Header
 // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tds/7af53667-1b72-4703-8258-7984e838f746
@@ -69,6 +70,17 @@ static __always_inline u8 is_mssql(connection_info_t *conn_info,
         return 0;
     }
 
+    // A CQL v4 request starts with 0x04 (TDS RESPONSE) and its stream-id
+    // occupies the TDS length field. Reject native Cassandra traffic before
+    // attempting TDS detection, including incomplete CQL frames.
+    if (data_len >= 9) {
+        u8 cql_header[9] = {};
+        bpf_probe_read(cql_header, sizeof(cql_header), (const void *)data);
+        if (looks_like_cql_request_header(cql_header)) {
+            return 0;
+        }
+    }
+
     size_t offset = 0;
     bool includes_known_command = false;
 
@@ -77,28 +89,21 @@ static __always_inline u8 is_mssql(connection_info_t *conn_info,
             break;
         }
 
-        struct mssql_hdr hdr = mssql_parse_hdr(data + offset);
-
-        if (hdr.length < k_mssql_hdr_size || hdr.length > data_len - offset) {
+        u8 raw_header[k_mssql_hdr_size] = {};
+        bpf_probe_read(raw_header, sizeof(raw_header), (const void *)(data + offset));
+        if (!valid_tds_packet_header(raw_header)) {
+            return 0;
+        }
+        const u16 packet_len = ((u16)raw_header[2] << 8) | raw_header[3];
+        if (packet_len > data_len - offset) {
             return 0;
         }
 
-        switch (hdr.type) {
-        case k_mssql_msg_sql_batch:
-        case k_mssql_msg_rpc:
-        case k_mssql_msg_response:
-        // Login/prelogin packets are accepted here to classify the connection
-        // early (before any SQL is sent). They carry no SQL and are never
-        // processed by the Go-side parser, which intentionally omits them.
-        case k_mssql_msg_login7:
-        case k_mssql_msg_prelogin:
-            includes_known_command = true;
-            break;
-        default:
-            break;
-        }
-
-        offset += hdr.length;
+        // All messages in a detected TDS buffer must have valid headers.
+        // Do not accept an arbitrary binary frame followed by one TDS-like
+        // header, which is possible for protocols with binary payloads.
+        includes_known_command = true;
+        offset += packet_len;
     }
 
     if (offset != data_len || !includes_known_command) {
