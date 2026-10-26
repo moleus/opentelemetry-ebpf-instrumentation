@@ -102,25 +102,25 @@ func TestRequestTraceParsing(t *testing.T) {
 	t.Run("Test basic parsing", func(t *testing.T) {
 		tr := makeHTTPRequestTrace("POST", "/users", 200, 1024, 2048, 5)
 		s := HTTPRequestTraceToSpan(nil, &tr)
-		assertMatches(t, &s, "POST", "/users", 1024, 2048, 200, 5)
+		assertMatches(t, &s, "POST", "/users", 1024, -1, 200, 5)
 	})
 
 	t.Run("Test with empty path, missing peer host and empty response body size", func(t *testing.T) {
 		tr := makeHTTPRequestTrace("GET", "", 403, 1024, 0, 6)
 		s := HTTPRequestTraceToSpan(nil, &tr)
-		assertMatches(t, &s, "GET", "", 1024, 0, 403, 6)
+		assertMatches(t, &s, "GET", "", 1024, -1, 403, 6)
 	})
 
 	t.Run("Test with missing peer port and empty content length", func(t *testing.T) {
 		tr := makeHTTPRequestTrace("GET", "/posts/1/1", 500, 0, 2048, 1)
 		s := HTTPRequestTraceToSpan(nil, &tr)
-		assertMatches(t, &s, "GET", "/posts/1/1", 0, 2048, 500, 1)
+		assertMatches(t, &s, "GET", "/posts/1/1", 0, -1, 500, 1)
 	})
 
 	t.Run("Test with invalid peer port", func(t *testing.T) {
 		tr := makeHTTPRequestTrace("GET", "/posts/1/1", 500, 1024, 2048, 1)
 		s := HTTPRequestTraceToSpan(nil, &tr)
-		assertMatches(t, &s, "GET", "/posts/1/1", 1024, 2048, 500, 1)
+		assertMatches(t, &s, "GET", "/posts/1/1", 1024, -1, 500, 1)
 	})
 
 	t.Run("Test with GRPC request", func(t *testing.T) {
@@ -372,4 +372,11 @@ func TestStripPattern(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestGoHTTPClientPreservesMeasuredResponseLength(t *testing.T) {
+	tr := makeHTTPRequestTrace("GET", "/items", 200, 0, 128, 1)
+	tr.Type = uint8(request.EventTypeHTTPClient)
+	span := HTTPRequestTraceToSpan(nil, &tr)
+	assert.Equal(t, int64(128), span.ResponseLength)
 }

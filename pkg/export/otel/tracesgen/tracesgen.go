@@ -748,7 +748,7 @@ func appendHTTPRequestBodySize(attrs []attribute.KeyValue, span *request.Span, o
 }
 
 func appendHTTPResponseBodySize(attrs []attribute.KeyValue, span *request.Span, optionalAttrs map[attr.Name]struct{}) []attribute.KeyValue {
-	if _, ok := optionalAttrs[attr.HTTPResponseBodySize]; !ok {
+	if _, ok := optionalAttrs[attr.HTTPResponseBodySize]; !ok || span.ResponseLength < 0 {
 		return attrs
 	}
 
