@@ -4,6 +4,7 @@
 package kafkaparser
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"testing"
@@ -556,4 +557,35 @@ func createValidFetchPacket(version int16) []byte {
 	}
 
 	return pkt[:offset]
+}
+
+// A FetchRequest is per topic and may fetch several partitions. An attribute
+// for one arbitrary first partition would misrepresent the whole request.
+func TestParseFetchMultiPartitionDoesNotSelectFirst(t *testing.T) {
+	for _, n := range []int{1, 2} {
+		var b bytes.Buffer
+		// Fetch v4: replica_id, max_wait_ms, min_bytes, max_bytes,
+		// isolation_level; followed by one topic named "events".
+		b.Write(make([]byte, 17))
+		require.NoError(t, binary.Write(&b, binary.BigEndian, uint32(1)))
+		require.NoError(t, binary.Write(&b, binary.BigEndian, uint16(len("events"))))
+		b.WriteString("events")
+		require.NoError(t, binary.Write(&b, binary.BigEndian, uint32(n)))
+		for i := range n {
+			require.NoError(t, binary.Write(&b, binary.BigEndian, uint32(i)))
+			require.NoError(t, binary.Write(&b, binary.BigEndian, uint64(100+i)))
+			require.NoError(t, binary.Write(&b, binary.BigEndian, uint32(4096)))
+		}
+		r := largebuf.NewLargeBufferFrom(b.Bytes()).NewReader()
+		req, err := ParseFetchRequest(&r, newTestHeader(APIKeyFetch, 4))
+		require.NoError(t, err)
+		require.Len(t, req.Topics, 1)
+		assert.Equal(t, "events", req.Topics[0].Name)
+		if n == 1 {
+			require.NotNil(t, req.Topics[0].Partition)
+			assert.Equal(t, int64(100), req.Topics[0].Partition.FetchOffset)
+		} else {
+			assert.Nil(t, req.Topics[0].Partition, "do not claim one partition for a multi-partition poll")
+		}
+	}
 }
