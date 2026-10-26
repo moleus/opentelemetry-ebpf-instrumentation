@@ -1329,3 +1329,15 @@ func TestKafkaFetchSpanIsReceiveNotProcess(t *testing.T) {
 	assert.Zero(t, span.MessagingInfo.Offset, "FetchOffset must not be represented as a message offset")
 	assert.NotEqual(t, request.MessagingProcess, span.Method)
 }
+
+func TestKafkaSpanUnresolvedEndpointOmitsPhantomPorts(t *testing.T) {
+	for _, port := range []uint16{0, 52428, 5672, 9092} {
+		span := TCPToKafkaToSpan(&TCPRequestInfo{
+			ConnInfo: BpfConnectionInfoT{S_port: 42000, D_port: port},
+		}, &KafkaInfo{Operation: Fetch, Topic: "orders"})
+		assert.Empty(t, span.Host)
+		assert.Empty(t, span.Peer)
+		assert.Zero(t, span.HostPort)
+		assert.Zero(t, span.PeerPort)
+	}
+}

@@ -1564,12 +1564,17 @@ func traceAttributesSelectorInternal(span *request.Span, optionalAttrs map[attr.
 		attrs = appendIfSet(attrs, request.DBNamespace, span.DBNamespace)
 	case request.EventTypeKafkaServer, request.EventTypeKafkaClient:
 		attrs = []attribute.KeyValue{
-			request.ServerPort(span.HostPort),
 			semconv.MessagingSystemKafka,
 			semconv.MessagingClientID(span.Statement),
 		}
 		attrs = appendIfSet(attrs, semconv.MessagingDestinationName, span.Path)
-		attrs = appendIfSet(attrs, request.ServerAddr, request.HostAsServer(span))
+		server := request.HostAsServer(span)
+		attrs = appendIfSet(attrs, request.ServerAddr, server)
+		// A port is not a server endpoint unless its address is known.
+		// Incomplete eBPF connection metadata must not become server.port.
+		if server != "" && span.HostPort > 0 {
+			attrs = append(attrs, request.ServerPort(span.HostPort))
+		}
 		attrs = append(attrs, messagingOperationAttrs(span.Method)...)
 
 		if span.Type == request.EventTypeKafkaClient {
