@@ -88,3 +88,29 @@ func TestTraceAttributesSelector_NetworkAttributesAreExcludable(t *testing.T) {
 		}
 	})
 }
+
+// A missing Kafka broker address must not produce a server.port attribute,
+// even if the eBPF connection field held a non-zero value.
+func TestKafkaUnknownPeerOmitsServerPort(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		host     string
+		port     int
+		wantPort bool
+	}{
+		{"unknown-zero", "", 0, false},
+		{"unknown-nonzero", "", 52428, false},
+		{"known", "broker.example", 9092, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			span := &request.Span{Type: request.EventTypeKafkaClient,
+				Method: request.MessagingReceive, Host: tt.host, HostPort: tt.port,
+				Statement: "test-client", Path: "example"}
+			attrs := TraceAttributesSelector(span, defaultTraceAttrs(t))
+			_, hasPort := attrValue(attrs, "server.port")
+			_, hasAddr := attrValue(attrs, "server.address")
+			assert.Equal(t, tt.wantPort, hasPort)
+			assert.Equal(t, tt.wantPort, hasAddr)
+		})
+	}
+}
