@@ -11,15 +11,27 @@
 enum {
     k_max_query_offset = 8,
 
-    k_max_sql_op_len = 6, // Maximum length of SQL operation names (e.g., "SELECT")
+    k_max_sql_op_len = 8, // Six-byte keyword plus comment delimiter lookahead
 };
 
 #define DEFINE_OP(op)                                                                              \
     static const char op##_op[] = #op;                                                             \
     static const u8 op_##op##_len = sizeof(#op) - 1;
 
+// A keyword that continues as a name or a path ("insert-hot", "alter-models",
+// "/insert/0") is not a SQL command. "/*" starts a comment and is accepted.
+static __always_inline bool is_sql_delimiter(char current, char next) {
+    if (current == '/') {
+        return next == '*';
+    }
+    return !(current == '-' || current == '_' || current == '.' ||
+             (current >= '0' && current <= '9') || (current >= 'a' && current <= 'z') ||
+             (current >= 'A' && current <= 'Z'));
+}
+
 #define CHECK_OP(op)                                                                               \
-    if (stricmp(stmt, op##_op, op_##op##_len))                                                     \
+    if (stricmp(stmt, op##_op, op_##op##_len) &&                                                   \
+        is_sql_delimiter(stmt[op_##op##_len], stmt[op_##op##_len + 1]))                            \
         return true;
 
 // Define SQL operations that we want to detect in SQL queries.
