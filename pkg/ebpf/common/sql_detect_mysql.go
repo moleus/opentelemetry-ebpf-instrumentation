@@ -124,6 +124,20 @@ func mysqlPreparedStatements(b []byte) (string, string, string) {
 	return op, table, text
 }
 
+// Bound the query to the first MySQL packet. The TCP tracker may append
+// unrelated commands after it, which must not enter the SQL statement.
+func mysqlFirstPacket(b []byte) []byte {
+	if len(b) < sqlprune.MySQLHdrSize+1 {
+		return b
+	}
+	return b[:min(len(b), sqlprune.MySQLHdrSize+int(readMySQLHeader(b).length))]
+}
+
+func mysqlQueryText(b []byte) []byte {
+	packet := mysqlFirstPacket(b)
+	return packet[min(len(packet), sqlprune.MySQLHdrSize+1):]
+}
+
 func handleMySQL(parseCtx *EBPFParseContext, event *TCPRequestInfo, requestBuffer, responseBuffer *largebuf.LargeBuffer) (request.Span, error) {
 	var (
 		op, stmt string
@@ -172,7 +186,7 @@ func handleMySQL(parseCtx *EBPFParseContext, event *TCPRequestInfo, requestBuffe
 			return span, errFallback
 		}
 
-		_, _, stmt = detectSQL(reqRaw[sqlprune.MySQLHdrSize+1:])
+		_, _, stmt = detectSQL(mysqlQueryText(reqRaw))
 		parseCtx.mysqlPreparedStatements.Add(mysqlPreparedStatementsKey{
 			connInfo: event.ConnInfo,
 			stmtID:   stmtID,
@@ -199,7 +213,7 @@ func handleMySQL(parseCtx *EBPFParseContext, event *TCPRequestInfo, requestBuffe
 		}
 		op, tables = sqlprune.SQLParseOperationAndTables(stmt)
 	case "QUERY":
-		op, tables, stmt = detectSQL(reqRaw[sqlprune.MySQLHdrSize+1:])
+		op, tables, stmt = detectSQL(mysqlQueryText(reqRaw))
 	default:
 		slog.Debug("MySQL command ID unhandled", "commandID", reqRaw[sqlprune.MySQLHdrSize])
 		return span, errFallback
