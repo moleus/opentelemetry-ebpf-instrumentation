@@ -638,6 +638,7 @@ and use `k8sattributesprocessor` in the Collector pipeline. Receiver validation
 rejects the standalone-only `enrich` section.
 
 The `mode` field supports: `autodetect` (default — enable if k8s environment is detected), `enabled`, and `disabled`.
+`enrichers.kubernetes.pod_event_queue_size` sets the maximum number of pending Pod events in each internal event queue (default: `1024`). When a queue is full, OBI drops the new event and increments `obi.kube.pod.events.dropped`.
 
 ### `correlation` Section
 

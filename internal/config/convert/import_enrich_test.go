@@ -38,6 +38,7 @@ func TestV2ToRuntimeEnrichAttributesAndKubernetesRoundTrip(t *testing.T) {
 	cfg := defaultRuntimeConfig()
 	cfg.Attributes.Kubernetes.Enable = kubeflags.EnabledTrue
 	cfg.Attributes.Kubernetes.ClusterName = "cluster-a"
+	cfg.Attributes.Kubernetes.PodEventQueueSize = 4096
 	cfg.Attributes.Kubernetes.KubeconfigPath = "/etc/kube/config"
 	cfg.Attributes.Kubernetes.InformersSyncTimeout = 42 * time.Second
 	cfg.Attributes.Kubernetes.ReconnectInitialInterval = 43 * time.Second

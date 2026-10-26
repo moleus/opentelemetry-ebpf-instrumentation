@@ -107,7 +107,13 @@ func (pf *ProcessFinder) Start(ctx context.Context, opts ...ProcessFinderStartOp
 		swarm.WithID("ProcessWatcher"))
 
 	kubeEnrichedEvents := msgh.QueueFromConfig[[]Event[ProcessAttrs]](pf.cfg, pf.ctxInfo.Metrics, "kubeEnrichedEvents")
-	swi.Add(WatcherKubeEnricherProvider(pf.ctxInfo.K8sInformer, processEvents, kubeEnrichedEvents),
+	swi.Add(WatcherKubeEnricherProvider(
+		pf.ctxInfo.K8sInformer,
+		pf.cfg.Attributes.Kubernetes.PodEventQueueSize,
+		pf.ctxInfo.Metrics,
+		processEvents,
+		kubeEnrichedEvents,
+	),
 		swarm.WithID("WatcherKubeEnricher"))
 
 	enrichedProcessEvents := startConfig.enrichedProcessEvents

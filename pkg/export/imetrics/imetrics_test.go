@@ -63,6 +63,32 @@ func TestPrometheusReporterQueueBufferUtilization(t *testing.T) {
 	assert.InDelta(t, 0.9, gaugeValue("traces"), 0.001)
 }
 
+func TestPrometheusReporterKubePodEventsDropped(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := NewPrometheusReporter(&InternalMetricsConfig{}, nil, registry)
+	reporter.KubePodEventsDropped("discovery")
+	reporter.KubePodEventsDropped("discovery")
+	reporter.KubePodEventsDropped("process_events")
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	var dropped *dto.MetricFamily
+	for _, family := range families {
+		if family.GetName() == "obi_kube_pod_events_dropped_total" {
+			dropped = family
+			break
+		}
+	}
+	require.NotNil(t, dropped)
+	require.Len(t, dropped.GetMetric(), 2)
+	values := map[string]float64{}
+	for _, metric := range dropped.GetMetric() {
+		values[metricLabels(metric)["queue"]] = metric.GetCounter().GetValue()
+	}
+	assert.Equal(t, float64(2), values["discovery"])
+	assert.Equal(t, float64(1), values["process_events"])
+}
+
 func TestPrometheusReporterBPFRingbufWriteCounts(t *testing.T) {
 	reporter := NewPrometheusReporter(&InternalMetricsConfig{}, nil, prometheus.NewRegistry())
 

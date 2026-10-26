@@ -1988,6 +1988,7 @@ func applyV2KubernetesEnricher(cfg *obi.Config, enrich *schema.Enrich, complete 
 func applyFullV2KubernetesEnricher(cfg *obi.Config, kubernetes schema.KubernetesEnricher) {
 	cfg.Attributes.Kubernetes.Enable = runtimeKubernetesMode(kubernetes.Mode)
 	cfg.Attributes.Kubernetes.ClusterName = kubernetes.ClusterName
+	cfg.Attributes.Kubernetes.PodEventQueueSize = kubernetes.PodEventQueueSize
 	cfg.Attributes.Kubernetes.KubeconfigPath = kubernetes.Auth.KubeconfigPath
 	cfg.Attributes.Kubernetes.InformersSyncTimeout = kubernetes.Informers.InitialSyncTimeout.TimeDuration()
 	cfg.Attributes.Kubernetes.ReconnectInitialInterval = kubernetes.Informers.ReconnectInitialInterval.TimeDuration()
@@ -2008,6 +2009,9 @@ func applyPartialV2KubernetesEnricher(cfg *obi.Config, kubernetes schema.Kuberne
 	}
 	if kubernetes.ClusterName != "" {
 		cfg.Attributes.Kubernetes.ClusterName = kubernetes.ClusterName
+	}
+	if kubernetes.PodEventQueueSize > 0 {
+		cfg.Attributes.Kubernetes.PodEventQueueSize = kubernetes.PodEventQueueSize
 	}
 	if kubernetes.ServiceNameTemplate != "" {
 		cfg.Attributes.Kubernetes.ServiceNameTemplate = kubernetes.ServiceNameTemplate

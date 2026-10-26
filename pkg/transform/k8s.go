@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"maps"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/obi/pkg/appolly/app"
@@ -17,6 +18,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/appolly/app/svc"
 	"go.opentelemetry.io/obi/pkg/appolly/discover/exec"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	"go.opentelemetry.io/obi/pkg/internal/helpers/container"
 	maps2 "go.opentelemetry.io/obi/pkg/internal/helpers/maps"
 	isync "go.opentelemetry.io/obi/pkg/internal/helpers/sync"
@@ -35,9 +37,14 @@ var containerInfoForPID = container.InfoForPID
 
 var errProcEventDecoratorStopped = errors.New("process event metadata decorator stopped")
 
+// DefaultPodEventQueueSize bounds the pending Kubernetes metadata events per OBI instance.
+const DefaultPodEventQueueSize = 1024
+
 // podEventsBatchSize limits how many pod events are handled before the decorator loop
 // gets back to its other sources.
 const podEventsBatchSize = 64
+
+const podEventDropLogInterval = time.Minute
 
 func klog() *slog.Logger {
 	return slog.With("component", "transform.KubernetesDecorator")
@@ -73,6 +80,9 @@ type KubernetesDecorator struct {
 	// Pods informer can't be disabled. For that purpose, you should disable the whole
 	// kubernetes metadata decoration.
 	DisableInformers []string `yaml:"disable_informers" env:"OTEL_EBPF_KUBE_DISABLE_INFORMERS"`
+
+	// PodEventQueueSize limits pending Pod metadata events. New events are dropped when the queue is full.
+	PodEventQueueSize int `yaml:"-" validate:"gte=1"`
 
 	// MetaCacheAddress specifies the host:port address of the obi-k8s-cache service instance
 	MetaCacheAddress string `yaml:"meta_cache_address" env:"OTEL_EBPF_KUBE_META_CACHE_ADDRESS"`
@@ -143,12 +153,14 @@ func KubeProcessEventDecoratorProvider(
 			clusterName:         KubeClusterName(ctx, cfg, ctxInfo.K8sInformer),
 			input:               input.Subscribe(msg.SubscriberName("transform.KubeProcessEventDecorator")),
 			output:              output,
-			podEvents:           isync.NewQueue[Event[*informer.ObjectMeta]](),
+			podEvents:           isync.NewBoundedQueue[Event[*informer.ObjectMeta]](EffectivePodEventQueueSize(cfg.PodEventQueueSize)),
 			podEventsReady:      make(chan struct{}, 1),
 			observerDone:        make(chan struct{}),
 			subscribeObserver:   store.Subscribe,
 			unsubscribeObserver: store.Unsubscribe,
 			tracker:             newPidContainerTracker(),
+			metrics:             ctxInfo.Metrics,
+			podEventQueueSize:   EffectivePodEventQueueSize(cfg.PodEventQueueSize),
 		}
 
 		decorator.log.Debug("starting KubeDecoratorProvider")
@@ -216,6 +228,9 @@ type procEventMetadataDecorator struct {
 	output              *msg.Queue[exec.ProcessEvent]
 	podEvents           *isync.Queue[Event[*informer.ObjectMeta]]
 	podEventsReady      chan struct{}
+	metrics             imetrics.Reporter
+	podEventQueueSize   int
+	lastDropLogUnixNano atomic.Int64
 	observerDone        chan struct{}
 	subscribeObserver   func(meta.Observer)
 	unsubscribeObserver func(meta.Observer)
@@ -301,9 +316,30 @@ func (md *procEventMetadataDecorator) On(event *informer.Event) error {
 		return nil
 	}
 
-	md.podEvents.Enqueue(podEvent)
+	if !md.podEvents.TryEnqueue(podEvent) {
+		imetrics.ReportKubePodEventsDropped(md.metrics, "process_events")
+		md.logPodEventDrop()
+		return nil
+	}
 	md.signalPodEvents()
 	return nil
+}
+
+// EffectivePodEventQueueSize returns the configured capacity or the default for an unset value.
+func EffectivePodEventQueueSize(configured int) int {
+	if configured <= 0 {
+		return DefaultPodEventQueueSize
+	}
+	return configured
+}
+
+func (md *procEventMetadataDecorator) logPodEventDrop() {
+	now := time.Now().UnixNano()
+	previous := md.lastDropLogUnixNano.Load()
+	if now-previous < int64(podEventDropLogInterval) || !md.lastDropLogUnixNano.CompareAndSwap(previous, now) {
+		return
+	}
+	md.log.Warn("dropping Kubernetes Pod event because the queue is full", "queue_capacity", md.podEventQueueSize)
 }
 
 func (md *procEventMetadataDecorator) k8sLoop(ctx context.Context) {

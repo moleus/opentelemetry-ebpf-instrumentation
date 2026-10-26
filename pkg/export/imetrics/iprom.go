@@ -61,6 +61,7 @@ type PrometheusReporter struct {
 	queueLength             *prometheus.GaugeVec
 	largeBufferDroppedBytes prometheus.Counter
 	traceSpansDropped       prometheus.Counter
+	kubePodEventsDropped    *prometheus.CounterVec
 }
 
 func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.PrometheusManager, registry *prometheus.Registry) *PrometheusReporter {
@@ -179,6 +180,10 @@ func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.Promet
 			Name: internalNames.TraceSpansDropped.Prom,
 			Help: "Trace spans rejected by the configured trace exporter queue",
 		}),
+		kubePodEventsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: internalNames.KubePodEventsDropped.Prom,
+			Help: "Kubernetes Pod metadata events dropped because a bounded queue was full",
+		}, []string{"queue"}),
 	}
 	if !cfg.AvoidedServices.Disabled {
 		pr.avoidedServicesLimiter = avoidedsvc.NewLimiter(cfg.AvoidedServices.Limit)
@@ -215,6 +220,7 @@ func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.Promet
 		pr.queueLength,
 		pr.largeBufferDroppedBytes,
 		pr.traceSpansDropped,
+		pr.kubePodEventsDropped,
 		prometheus.NewGoCollector(),
 	}
 	if pr.avoidedServices != nil {
@@ -331,6 +337,10 @@ func (p *PrometheusReporter) QueueLength(subscriber string, length int) {
 
 func (p *PrometheusReporter) OTELTraceSpansDropped(spans int) {
 	p.traceSpansDropped.Add(float64(spans))
+}
+
+func (p *PrometheusReporter) KubePodEventsDropped(queue string) {
+	p.kubePodEventsDropped.WithLabelValues(queue).Inc()
 }
 
 func (p *PrometheusReporter) QueueBufferUtilization(subscriber string, ratio float64) {

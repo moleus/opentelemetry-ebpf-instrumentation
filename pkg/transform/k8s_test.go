@@ -4,9 +4,11 @@
 package transform
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +32,18 @@ import (
 )
 
 const timeout = 5 * time.Second
+
+type podEventDropCounter struct {
+	imetrics.NoopReporter
+	dropped map[string]int
+}
+
+func (m *podEventDropCounter) KubePodEventsDropped(queue string) {
+	if m.dropped == nil {
+		m.dropped = map[string]int{}
+	}
+	m.dropped[queue]++
+}
 
 func TestDecoration(t *testing.T) {
 	originalInfoForPID := kube.InfoForPID
@@ -630,12 +644,14 @@ func newProcEventDecoratorHarness(t *testing.T) *procEventDecoratorHarness {
 		clusterName:         "the-cluster",
 		input:               input,
 		output:              output,
-		podEvents:           isync.NewQueue[Event[*informer.ObjectMeta]](),
+		podEvents:           isync.NewBoundedQueue[Event[*informer.ObjectMeta]](DefaultPodEventQueueSize),
 		podEventsReady:      make(chan struct{}, 1),
 		observerDone:        make(chan struct{}),
 		subscribeObserver:   store.Subscribe,
 		unsubscribeObserver: store.Unsubscribe,
 		tracker:             newPidContainerTracker(),
+		podEventQueueSize:   DefaultPodEventQueueSize,
+		metrics:             imetrics.NoopReporter{},
 	}
 	harness := &procEventDecoratorHarness{
 		decorator:   decorator,
@@ -749,6 +765,24 @@ func TestProcEventMetadataDecoratorOnDoesNotBlock(t *testing.T) {
 	}
 	_, ok := h.decorator.podEvents.TryDequeue()
 	require.False(t, ok)
+}
+
+func TestProcEventMetadataDecoratorBoundsPodEventQueue(t *testing.T) {
+	h := newProcEventDecoratorHarness(t)
+	metrics := &podEventDropCounter{}
+	h.decorator.podEvents = isync.NewBoundedQueue[Event[*informer.ObjectMeta]](3)
+	h.decorator.podEventQueueSize = 3
+	h.decorator.metrics = metrics
+	var logs bytes.Buffer
+	h.decorator.log = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	for i := range 10 {
+		require.NoError(t, h.decorator.On(procEventDecoratorPodEvent("pod", app.PID(i))))
+	}
+
+	assert.Equal(t, 3, h.decorator.podEvents.Len())
+	assert.Equal(t, 7, metrics.dropped["process_events"])
+	assert.Equal(t, 1, strings.Count(logs.String(), "dropping Kubernetes Pod event"))
 }
 
 func TestProcEventMetadataDecoratorDrainsPodEventsInBatches(t *testing.T) {

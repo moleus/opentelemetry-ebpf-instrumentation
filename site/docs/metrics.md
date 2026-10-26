@@ -1144,6 +1144,18 @@ How long, in seconds, it takes from a Kubernetes event happening until it is for
 
 No attributes.
 
+## `obi.kube.pod.events.dropped`
+
+Kubernetes Pod metadata events dropped because a bounded queue was full.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | 1 | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `queue` | string | `required` | development | Name of the Kubernetes Pod event queue that dropped an event. | discovery; process_events |
+
 ## `obi.network.flow.bytes`
 
 Total bytes observed per network flow, grouped by the configured attribute selection.

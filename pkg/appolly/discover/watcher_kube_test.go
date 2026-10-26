@@ -28,6 +28,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/obi"
 	"go.opentelemetry.io/obi/pkg/pipe/msg"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
+	"go.opentelemetry.io/obi/pkg/transform"
 )
 
 const (
@@ -45,6 +46,21 @@ const (
 	deploymentName = "the-deployment"
 	podName        = "the-deployment-123456789-abcde"
 )
+
+type droppedPodEventMetrics struct {
+	imetrics.NoopReporter
+	mu      sync.Mutex
+	dropped map[string]int
+}
+
+func (m *droppedPodEventMetrics) KubePodEventsDropped(queue string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.dropped == nil {
+		m.dropped = map[string]int{}
+	}
+	m.dropped[queue]++
+}
 
 func testKubeMatch(t *testing.T, m Event[ProcessMatch], name string, pid app.PID) {
 	assert.Equal(t, EventCreated, m.Type)
@@ -94,7 +110,7 @@ func TestWatcherKubeEnricher(t *testing.T) {
 			defer input.Close()
 			output := msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(10))
 			outputCh := output.Subscribe()
-			wkeNodeFunc, err := WatcherKubeEnricherProvider(&fakeMetadataProvider{store: store}, input, output)(t.Context())
+			wkeNodeFunc, err := WatcherKubeEnricherProvider(&fakeMetadataProvider{store: store}, transform.DefaultPodEventQueueSize, imetrics.NoopReporter{}, input, output)(t.Context())
 			require.NoError(t, err)
 			go wkeNodeFunc(t.Context())
 
@@ -138,7 +154,7 @@ func TestWatcherKubeEnricherForwardsProcessesWithoutContainer(t *testing.T) {
 	outputCh := output.Subscribe()
 	defer output.Close()
 
-	wk := newWatcherKubeEnricher(store, input.Subscribe(), output)
+	wk := newWatcherKubeEnricher(store, input.Subscribe(), output, transform.DefaultPodEventQueueSize, imetrics.NoopReporter{})
 
 	prevContainerInfoForPID := containerInfoForPID
 	containerInfoForPID = func(_ app.PID) (container.Info, error) {
@@ -175,7 +191,7 @@ func TestWatcherKubeEnricherWithMatcher(t *testing.T) {
 	outputQueue := msg.NewQueue[[]Event[ProcessMatch]](msg.ChannelBufferLen(10))
 	outputCh := outputQueue.Subscribe()
 	swi := swarm.Instancer{}
-	swi.Add(WatcherKubeEnricherProvider(&fakeMetadataProvider{store: store}, inputQueue, connectQueue))
+	swi.Add(WatcherKubeEnricherProvider(&fakeMetadataProvider{store: store}, transform.DefaultPodEventQueueSize, imetrics.NoopReporter{}, inputQueue, connectQueue))
 
 	pipeConfig := obi.Config{}
 	require.NoError(t, yaml.Unmarshal([]byte(`discovery:
@@ -319,7 +335,7 @@ func TestWatcherKubeEnricherWithMultiPIDContainers(t *testing.T) {
 	outputCh := output.Subscribe()
 	defer output.Close()
 
-	wk := newWatcherKubeEnricher(store, input.Subscribe(), output)
+	wk := newWatcherKubeEnricher(store, input.Subscribe(), output, transform.DefaultPodEventQueueSize, imetrics.NoopReporter{})
 
 	const containerAll = "container-contains-all"
 	const containerAllName = "container-contains-all-name"
@@ -430,7 +446,7 @@ func TestWatcherKubeEnricherHoldsProcessUntilPodIsKnown(t *testing.T) {
 	outputQueue := msg.NewQueue[[]Event[ProcessMatch]](msg.ChannelBufferLen(10))
 	outputCh := outputQueue.Subscribe()
 	swi := swarm.Instancer{}
-	swi.Add(WatcherKubeEnricherProvider(&fakeMetadataProvider{store: store}, inputQueue, connectQueue))
+	swi.Add(WatcherKubeEnricherProvider(&fakeMetadataProvider{store: store}, transform.DefaultPodEventQueueSize, imetrics.NoopReporter{}, inputQueue, connectQueue))
 
 	pipeConfig := obi.Config{}
 	require.NoError(t, yaml.Unmarshal([]byte(`discovery:
@@ -476,7 +492,7 @@ func TestWatcherKubeEnricherNeverForwardsPodSandbox(t *testing.T) {
 	output := msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(10))
 	outputCh := output.Subscribe()
 	defer output.Close()
-	wk := newWatcherKubeEnricher(store, input.Subscribe(), output)
+	wk := newWatcherKubeEnricher(store, input.Subscribe(), output, transform.DefaultPodEventQueueSize, imetrics.NoopReporter{})
 
 	pod := &informer.ObjectMeta{
 		Name: "pod-1", Namespace: namespace, Kind: "Pod",
@@ -510,7 +526,7 @@ func TestWatcherKubeEnricherForwardsUnknownKubeletCgroupProcess(t *testing.T) {
 	defer output.Close()
 
 	logs := &bytes.Buffer{}
-	wk := newWatcherKubeEnricher(store, input.Subscribe(), output)
+	wk := newWatcherKubeEnricher(store, input.Subscribe(), output, transform.DefaultPodEventQueueSize, imetrics.NoopReporter{})
 	wk.log = slog.New(slog.NewTextHandler(logs, nil))
 
 	// forwarded bare, as a host process, with a single warning even if reported twice
@@ -626,7 +642,7 @@ func TestWatcherKubeEnricherOnDoesNotBlockAndStopsWithEnrich(t *testing.T) {
 	input := msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(10))
 	output := msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(10))
 	output.Subscribe()
-	wk := newWatcherKubeEnricher(store, input.Subscribe(), output)
+	wk := newWatcherKubeEnricher(store, input.Subscribe(), output, transform.DefaultPodEventQueueSize, imetrics.NoopReporter{})
 
 	pod := &informer.ObjectMeta{
 		Name: "pod-1", Namespace: namespace, Kind: "Pod",
@@ -671,7 +687,7 @@ func TestWatcherKubeEnricherPublishesPodBeforeLaterProcessTermination(t *testing
 	// unbuffered, so publishing blocks until the test reads
 	output := msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(0))
 	outputCh := output.Subscribe()
-	wk := newWatcherKubeEnricher(store, input.Subscribe(), output)
+	wk := newWatcherKubeEnricher(store, input.Subscribe(), output, transform.DefaultPodEventQueueSize, imetrics.NoopReporter{})
 
 	go wk.enrich(t.Context())
 
@@ -708,7 +724,7 @@ func TestWatcherKubeEnricherDrainsPodEventsInBatches(t *testing.T) {
 	defer input.Close()
 	output := msg.NewQueue[[]Event[ProcessAttrs]](msg.ChannelBufferLen(10))
 	output.Subscribe()
-	wk := newWatcherKubeEnricher(store, input.Subscribe(), output)
+	wk := newWatcherKubeEnricher(store, input.Subscribe(), output, transform.DefaultPodEventQueueSize, imetrics.NoopReporter{})
 
 	pod := &informer.ObjectMeta{
 		Name: "pod-1", Namespace: namespace, Kind: "Pod",
@@ -732,4 +748,29 @@ func TestWatcherKubeEnricherDrainsPodEventsInBatches(t *testing.T) {
 		remaining++
 	}
 	assert.Equal(t, queued-podEventsBatchSize, remaining)
+}
+
+func TestWatcherKubeEnricherBoundsPodEventQueue(t *testing.T) {
+	store := kube.NewStore(&fakeInformer{}, kube.ResourceLabels{}, nil, imetrics.NoopReporter{})
+	input := msg.NewQueue[[]Event[ProcessAttrs]]()
+	output := msg.NewQueue[[]Event[ProcessAttrs]]()
+	metrics := &droppedPodEventMetrics{}
+	wk := newWatcherKubeEnricher(store, input.Subscribe(), output, 3, metrics)
+	var logs bytes.Buffer
+	wk.log = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	event := &informer.Event{
+		Type: informer.EventType_CREATED,
+		Resource: &informer.ObjectMeta{
+			Name: "pod", Namespace: namespace, Kind: "Pod",
+			Pod: &informer.PodInfo{Containers: []*informer.ContainerInfo{{Id: "container", Name: "app"}}},
+		},
+	}
+	for range 10 {
+		require.NoError(t, wk.On(event))
+	}
+
+	assert.Equal(t, 3, wk.podEvents.Len())
+	assert.Equal(t, 7, metrics.dropped["discovery"])
+	assert.Equal(t, 1, strings.Count(logs.String(), "dropping Kubernetes Pod event"))
 }

@@ -152,6 +152,36 @@ func TestInternalMetricsReporterQueueBufferUtilization(t *testing.T) {
 	assert.InDelta(t, 0.42, records[0].FloatVal, 0.001)
 }
 
+func TestInternalMetricsReporterKubePodEventsDropped(t *testing.T) {
+	metricRecords := make(chan collector.MetricRecord, 16)
+	mcfg := &otelcfg.MetricsConfig{
+		Interval:      10 * time.Millisecond,
+		MetricsExport: testMetricsConsumer(metricRecords),
+	}
+	ctxInfo := &global.ContextInfo{
+		NodeMeta:            metadata.NodeMeta{HostID: "test-host"},
+		OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: mcfg},
+	}
+
+	reporter, err := NewInternalMetricsReporter(
+		t.Context(),
+		ctxInfo,
+		mcfg,
+		&imetrics.InternalMetricsConfig{BpfMetricScrapeInterval: time.Millisecond},
+	)
+	require.NoError(t, err)
+
+	reporter.KubePodEventsDropped("discovery")
+	reporter.KubePodEventsDropped("discovery")
+
+	records := readMetricsByName(t, metricRecords, time.Second,
+		attr.VendorPrefix+".kube.pod.events.dropped",
+	)
+	require.Len(t, records, 1)
+	assert.Equal(t, "discovery", records[0].Attributes["queue"])
+	assert.Equal(t, int64(2), records[0].IntVal)
+}
+
 func TestInternalMetricsReporterBPFRingbufWriteCounts(t *testing.T) {
 	metricRecords := make(chan collector.MetricRecord, 16)
 	mcfg := &otelcfg.MetricsConfig{

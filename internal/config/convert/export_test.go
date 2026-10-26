@@ -184,6 +184,7 @@ func TestRuntimeToV2CustomConfig(t *testing.T) {
 	cfg.Attributes.HostID.Override = "host-id-1"
 	cfg.Attributes.Kubernetes.Enable = "true"
 	cfg.Attributes.Kubernetes.ClusterName = "cluster-a"
+	cfg.Attributes.Kubernetes.PodEventQueueSize = 4096
 	cfg.Attributes.Kubernetes.KubeconfigPath = "/etc/kube/config"
 	cfg.Attributes.Kubernetes.InformersSyncTimeout = 42 * time.Second
 	cfg.Attributes.Kubernetes.ReconnectInitialInterval = 43 * time.Second
@@ -413,6 +414,7 @@ func TestRuntimeToV2CustomConfig(t *testing.T) {
 
 	require.Equal(t, schema.KubernetesModeEnabled, value(t, ext.Enrich, "enrichers", "kubernetes", "mode"))
 	require.Equal(t, "cluster-a", value(t, ext.Enrich, "enrichers", "kubernetes", "cluster_name"))
+	require.Equal(t, 4096, value(t, ext.Enrich, "enrichers", "kubernetes", "pod_event_queue_size"))
 	require.Equal(t, "/etc/kube/config", value(t, ext.Enrich, "enrichers", "kubernetes", "auth", "kubeconfig_path"))
 	require.Equal(t, schema.Duration(42*time.Second), value(t, ext.Enrich, "enrichers", "kubernetes", "informers", "initial_sync_timeout"))
 	require.Equal(t, schema.Duration(43*time.Second), value(t, ext.Enrich, "enrichers", "kubernetes", "informers", "reconnect_initial_interval"))

@@ -47,6 +47,7 @@ func (m *KubernetesMode) UnmarshalYAML(value *yaml.Node) error {
 type KubernetesEnricher struct {
 	Mode                 KubernetesMode          `yaml:"mode"`
 	ClusterName          string                  `yaml:"cluster_name"`
+	PodEventQueueSize    int                     `yaml:"pod_event_queue_size"`
 	ServiceNameTemplate  string                  `yaml:"service_name_template"`
 	Auth                 KubernetesAuth          `yaml:"auth"`
 	Informers            KubernetesInformers     `yaml:"informers"`

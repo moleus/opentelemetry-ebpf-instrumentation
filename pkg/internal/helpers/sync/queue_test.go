@@ -167,3 +167,23 @@ func TestQueueTryDequeue(t *testing.T) {
 	_, ok = q.TryDequeue()
 	assert.False(t, ok)
 }
+
+func TestBoundedQueueDropsNewestAndKeepsFIFO(t *testing.T) {
+	q := NewBoundedQueue[int](3)
+
+	for i := range 10 {
+		if i < 3 {
+			assert.True(t, q.TryEnqueue(i))
+		} else {
+			assert.False(t, q.TryEnqueue(i))
+		}
+		assert.LessOrEqual(t, q.Len(), 3)
+	}
+
+	for i := range 3 {
+		value, ok := q.TryDequeue()
+		require.True(t, ok)
+		assert.Equal(t, i, value)
+	}
+	assert.Equal(t, 0, q.Len())
+}

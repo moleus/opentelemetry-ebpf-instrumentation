@@ -41,6 +41,7 @@ func TestInternalPrometheusNames(t *testing.T) {
 		{internal.QueueLength, "obi_queue_length"},
 		{internal.LargeBufferDroppedBytes, "obi_large_buffer_dropped_bytes_total"},
 		{internal.TraceSpansDropped, "obi_otel_trace_spans_dropped_total"},
+		{internal.KubePodEventsDropped, "obi_kube_pod_events_dropped_total"},
 	}
 
 	for _, test := range tests {
@@ -87,6 +88,7 @@ func TestInternalMetricsAllDeclared(t *testing.T) {
 		"QueueLength":              internal.QueueLength,
 		"LargeBufferDroppedBytes":  internal.LargeBufferDroppedBytes,
 		"TraceSpansDropped":        internal.TraceSpansDropped,
+		"KubePodEventsDropped":     internal.KubePodEventsDropped,
 	} {
 		t.Run(name, func(t *testing.T) {
 			require.NotEmpty(t, m.OTEL, "OTEL name must be set")
