@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
+	"go.opentelemetry.io/obi/pkg/internal/ebpf/cqlparser"
 	"go.opentelemetry.io/obi/pkg/internal/largebuf"
 	"go.opentelemetry.io/obi/pkg/internal/sqlprune"
 )
@@ -55,6 +56,9 @@ const (
 // those are accepted by the BPF classifier to identify the connection early,
 // but they carry no SQL and are never passed to this parser.
 func isMSSQL(b *largebuf.LargeBuffer) bool {
+	if cqlparser.LooksLikeHeader(b.UnsafeView()) {
+		return false
+	}
 	if b.Len() < kMSSQLHeaderLen {
 		return false
 	}
@@ -67,13 +71,13 @@ func isMSSQL(b *largebuf.LargeBuffer) bool {
 		return false
 	}
 
-	// Status byte check: upper 4 bits are reserved and should be 0.
-	// This helps filter out random binary data that might match the packet type.
+	// Use the MS-TDS status mask. RESETCONNECTIONSKIPTRAN (0x10) is
+	// valid for client batch/RPC; the previous upper-nibble check dropped it.
 	status, err := b.U8At(1)
-	if err != nil {
-		return false
-	}
-	if (status & 0xF0) != 0 {
+	if err != nil || status&0xe4 != 0 ||
+		status&0x02 != 0 && status&0x01 == 0 ||
+		status&0x18 == 0x18 ||
+		status&0x18 != 0 && pktType != kMSSQLBatch && pktType != kMSSQLRPC {
 		return false
 	}
 
