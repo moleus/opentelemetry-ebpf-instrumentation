@@ -273,8 +273,9 @@ func protocolSelected(list []instrumentations.Instrumentation, mapping protocolM
 
 func captureRuntimes(cfg *obi.Config) schema.CaptureRuntimes {
 	return schema.CaptureRuntimes{
-		Go: schema.Runtime{
-			Enabled: !cfg.Discovery.SkipGoSpecificTracers,
+		Go: schema.GoRuntime{
+			Enabled:        !cfg.Discovery.SkipGoSpecificTracers,
+			MaxPclntabSize: cfg.Discovery.GoMaxPclntabSize,
 		},
 		NodeJS: schema.Runtime{
 			Enabled: cfg.NodeJS.Enabled,

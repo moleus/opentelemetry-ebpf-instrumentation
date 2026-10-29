@@ -275,3 +275,23 @@ func metricLabels(metric *dto.Metric) map[string]string {
 	}
 	return labels
 }
+
+func TestPrometheusGoInspectionSkipped(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := NewPrometheusReporter(&InternalMetricsConfig{}, nil, registry)
+	reporter.GoInspectionSkipped("pclntab_too_large")
+	reporter.GoInspectionSkipped("pclntab_too_large")
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != "obi_go_inspection_skipped_total" {
+			continue
+		}
+		require.Len(t, family.Metric, 1)
+		metric := family.Metric[0]
+		assert.Equal(t, float64(2), metric.GetCounter().GetValue())
+		assert.Equal(t, map[string]string{"reason": "pclntab_too_large"}, metricLabels(metric))
+		return
+	}
+	t.Fatal("Go inspection counter was not registered")
+}
