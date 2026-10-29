@@ -33,6 +33,8 @@ import (
 	"go.opentelemetry.io/obi/pkg/pipe/swarm/swarms"
 )
 
+var errGoInspectionSizeLimit = errors.New("Go offset inspection skipped: .gopclntab exceeds size limit")
+
 // Swappable in tests so typer tests don't depend on /proc inspections.
 var findProcLanguage = procs.FindProcLanguage
 
@@ -355,6 +357,14 @@ func (t *typer) inspectOffsets(execElf *exec.FileInfo) (*goexec.Offsets, bool, e
 	if t.cfg.Discovery.SkipGoSpecificTracers {
 		t.log.Debug("skipping inspection for Go functions", "pid", execElf.Pid(), "comm", execElf.CmdExePath())
 		return nil, false, nil
+	}
+	if limit := t.cfg.Discovery.GoMaxPclntabSize; limit > 0 {
+		if section := execElf.ELF().Section(".gopclntab"); section != nil && section.Size > limit {
+			t.log.Warn("Skipping Go offset inspection, using generic instrumentation",
+				"exe", execElf.CmdExePath(), "pclntab_size", section.Size, "limit", limit)
+			t.metrics.GoInspectionSkipped("pclntab_too_large")
+			return nil, false, errGoInspectionSizeLimit
+		}
 	}
 	t.log.Debug("inspecting", "pid", execElf.Pid(), "comm", execElf.CmdExePath())
 	offsets, err := goexec.InspectOffsets(execElf, t.allGoFunctions)

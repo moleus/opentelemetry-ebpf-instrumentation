@@ -1,5 +1,14 @@
 file_format: definition/2
 attributes:
+  - key: obi.go.inspection.skip.reason
+    type:
+      members:
+        - id: pclntab_too_large
+          value: pclntab_too_large
+          stability: development
+    stability: development
+    brief: Reason Go offset inspection was skipped.
+
   - key: source
     type: string
     stability: development
@@ -181,6 +190,7 @@ attribute_groups:
       directly rather than declaring an OBI-specific alias.
     stability: development
     attributes:
+      - ref: obi.go.inspection.skip.reason
       - ref: obi.goarch
       - ref: obi.goos
       - ref: obi.goversion

@@ -326,6 +326,17 @@ metrics:
         requirement_level:
           conditionally_required: if the operation ended in an error
 
+  - name: obi.go.inspection.skipped
+    instrument: counter
+    unit: ""
+    stability: development
+    requirement_level: recommended
+    brief: Go offset inspections skipped by reason.
+    note: Counts uncached executable inspections, not processes or attach failures.
+    attributes:
+      - ref: obi.go.inspection.skip.reason
+        requirement_level: required
+
   - name: obi.avoided.services
     instrument: gauge
     unit: ""

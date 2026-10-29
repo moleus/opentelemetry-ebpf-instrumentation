@@ -1863,6 +1863,7 @@ func applyV2Runtimes(cfg *obi.Config, runtimes schema.CaptureRuntimes, complete 
 
 func applyFullV2Runtimes(cfg *obi.Config, runtimes schema.CaptureRuntimes) {
 	cfg.Discovery.SkipGoSpecificTracers = !runtimes.Go.Enabled
+	cfg.Discovery.GoMaxPclntabSize = runtimes.Go.MaxPclntabSize
 	cfg.NodeJS.Enabled = runtimes.NodeJS.Enabled
 	cfg.Java.Enabled = runtimes.Java.Enabled
 	cfg.Java.Debug = runtimes.Java.Debug.Enabled
@@ -1871,6 +1872,9 @@ func applyFullV2Runtimes(cfg *obi.Config, runtimes schema.CaptureRuntimes) {
 }
 
 func applyPartialV2Runtimes(cfg *obi.Config, runtimes schema.CaptureRuntimes) {
+	if runtimes.Go.MaxPclntabSize != 0 {
+		cfg.Discovery.GoMaxPclntabSize = runtimes.Go.MaxPclntabSize
+	}
 	if runtimes.Go.Enabled {
 		cfg.Discovery.SkipGoSpecificTracers = false
 	}

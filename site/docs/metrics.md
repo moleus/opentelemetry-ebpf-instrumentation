@@ -1093,6 +1093,18 @@ Length of the groups of traces flushed from the eBPF tracer to the next pipeline
 
 No attributes.
 
+## `obi.go.inspection.skipped`
+
+Go offset inspections skipped by reason.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | 1 | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `obi.go.inspection.skip.reason` | enum | `required` | development | Reason Go offset inspection was skipped. | pclntab_too_large |
+
 ## `obi.instrumentation.errors`
 
 Total number of instrumentation errors, by process name and error type.

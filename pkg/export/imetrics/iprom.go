@@ -59,6 +59,7 @@ type PrometheusReporter struct {
 
 	queueCapacityRatio      *prometheus.GaugeVec
 	queueLength             *prometheus.GaugeVec
+	goInspectionSkipped     *prometheus.CounterVec
 	largeBufferDroppedBytes prometheus.Counter
 	traceSpansDropped       prometheus.Counter
 	kubePodEventsDropped    *prometheus.CounterVec
@@ -172,6 +173,10 @@ func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.Promet
 			Name: internalNames.QueueLength.Prom,
 			Help: "Number of unread messages in an internal Go channel",
 		}, []string{attr.Subscriber.Prom()}),
+		goInspectionSkipped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: internalNames.GoInspectionSkipped.Prom,
+			Help: "Go offset inspections skipped by reason",
+		}, []string{"reason"}),
 		largeBufferDroppedBytes: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: internalNames.LargeBufferDroppedBytes.Prom,
 			Help: "Payload bytes discarded after a configured per-request large buffer cap is reached",
@@ -219,6 +224,7 @@ func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.Promet
 		pr.queueCapacityRatio,
 		pr.queueLength,
 		pr.largeBufferDroppedBytes,
+		pr.goInspectionSkipped,
 		pr.traceSpansDropped,
 		pr.kubePodEventsDropped,
 		prometheus.NewGoCollector(),
@@ -325,6 +331,10 @@ func (p *PrometheusReporter) BPFPacketStats(count, ignored uint64) {
 func (p *PrometheusReporter) BPFRingbufWriteCounts(ringbuf string, writes, failures uint64) {
 	p.bpfRingbufWrites.WithLabelValues(ringbuf).Add(float64(writes))
 	p.bpfRingbufFailures.WithLabelValues(ringbuf).Add(float64(failures))
+}
+
+func (p *PrometheusReporter) GoInspectionSkipped(reason string) {
+	p.goInspectionSkipped.WithLabelValues(reason).Inc()
 }
 
 func (p *PrometheusReporter) LargeBufferDroppedBytes(bytes uint64) {

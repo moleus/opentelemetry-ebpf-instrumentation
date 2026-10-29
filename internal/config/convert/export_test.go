@@ -1230,3 +1230,17 @@ func keys(root any) []string {
 	}
 	return out
 }
+
+func TestGoInspectionLimitV2RoundTrip(t *testing.T) {
+	cfg := defaultRuntimeConfig()
+	cfg.Discovery.GoMaxPclntabSize = 64 << 20
+	_, ext := RuntimeToV2(&cfg)
+	require.Equal(t, uint64(64<<20), ext.Capture.Runtimes.Go.MaxPclntabSize)
+	got, err := V2ToRuntime(ext)
+	require.NoError(t, err)
+	require.Equal(t, cfg.Discovery.GoMaxPclntabSize, got.Discovery.GoMaxPclntabSize)
+	ext.Capture.Runtimes.Go.MaxPclntabSize = 0
+	got, err = V2ToRuntime(ext)
+	require.NoError(t, err)
+	require.Zero(t, got.Discovery.GoMaxPclntabSize)
+}
