@@ -297,7 +297,7 @@ func findGoSymbolTable(elfF *elf.File) (*gosym.Table, error) {
 	var pclndat []byte
 	gopclntab := elfF.Section(".gopclntab")
 	if gopclntab != nil {
-		if pclndat, err = gopclntab.Data(); err != nil {
+		if pclndat, err = sectionData(gopclntab); err != nil {
 			return nil, fmt.Errorf("acquiring .gopclntab data: %w", err)
 		}
 	}
@@ -526,7 +526,7 @@ func moduledataCandidates(elfF *elf.File, gopclntabAddr uint64, mdoffs goabi.Mod
 		if sec.Type == elf.SHT_NOBITS || sec.Type == elf.SHT_NULL || sec.Flags&elf.SHF_WRITE == 0 {
 			continue
 		}
-		data, err := sec.Data()
+		data, err := sectionData(sec)
 		if err != nil {
 			continue
 		}
@@ -667,11 +667,11 @@ func buildRelocationInfo(elfF *elf.File) relocationInfo {
 	for _, sec := range elfF.Sections {
 		switch sec.Type {
 		case elf.SHT_RELA:
-			if data, err := sec.Data(); err == nil {
+			if data, err := sectionData(sec); err == nil {
 				decodeRelaRelative(relocs.explicit, data, elfF.ByteOrder, relativeType)
 			}
 		case shtRELR:
-			if data, err := sec.Data(); err == nil {
+			if data, err := sectionData(sec); err == nil {
 				decodeRelr(relocs.relr, data, elfF.ByteOrder)
 			}
 		}
