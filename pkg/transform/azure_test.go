@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/stretchr/testify/require"
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.41.0"
@@ -27,6 +28,17 @@ func TestAzureScope(t *testing.T) {
 	require.Equal(t, AzureNameResolverConfig{"other", "group"}, azureScope(&node, AzureNameResolverConfig{SubscriptionID: " other\n", ResourceGroup: "  "}))
 	node.Metadata[0].Value = "/not/an/arm/id"
 	require.Empty(t, detectedAzureScope(&node))
+}
+
+func TestAzureInventoryCredentialIsManagedIdentityOnly(t *testing.T) {
+	t.Setenv("AZURE_CLIENT_ID", "client")
+	t.Setenv("AZURE_TENANT_ID", "tenant")
+	t.Setenv("AZURE_CLIENT_SECRET", "secret")
+
+	credential, err := azureInventoryCredential()
+	require.NoError(t, err)
+	_, ok := credential.(*azidentity.ManagedIdentityCredential)
+	require.True(t, ok)
 }
 
 func TestAzureMetadataRefreshersConfiguration(t *testing.T) {

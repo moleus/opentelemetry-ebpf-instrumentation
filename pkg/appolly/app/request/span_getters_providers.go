@@ -38,6 +38,7 @@ var dbClientDefaultPorts = map[string]int{
 	semconv.DBSystemNameMongoDB.Value.AsString():            27017,
 	semconv.DBSystemNameCouchbase.Value.AsString():          11210,
 	"aerospike": 3000,
+	"cassandra": 9042,
 	semconv.DBSystemNameElasticsearch.Value.AsString(): 9200,
 	semconv.DBSystemNameOpenSearch.Value.AsString():    9200,
 }

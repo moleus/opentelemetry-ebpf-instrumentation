@@ -1093,6 +1093,18 @@ Length of the groups of traces flushed from the eBPF tracer to the next pipeline
 
 No attributes.
 
+## `obi.go.inspection.skipped`
+
+Go offset inspections skipped by reason.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | 1 | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `obi.go.inspection.skip.reason` | enum | `required` | development | Reason Go offset inspection was skipped. | pclntab_too_large |
+
 ## `obi.instrumentation.errors`
 
 Total number of instrumentation errors, by process name and error type.
@@ -1143,6 +1155,18 @@ How long, in seconds, it takes from a Kubernetes event happening until it is for
 | histogram | s | development |
 
 No attributes.
+
+## `obi.kube.pod.events.dropped`
+
+Kubernetes Pod metadata events dropped because a bounded queue was full.
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | 1 | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `queue` | string | `required` | development | Name of the Kubernetes Pod event queue that dropped an event. | discovery; process_events |
 
 ## `obi.network.flow.bytes`
 

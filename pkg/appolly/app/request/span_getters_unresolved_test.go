@@ -14,6 +14,20 @@ import (
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
 )
 
+func expectedUnresolvedAddress(span *Span, client bool, value string, unresolved UnresolvedNames) string {
+	replacement := unresolved.Generic
+	if client {
+		if span.IsClientSpan() {
+			replacement = unresolved.Generic
+		} else {
+			replacement = unresolved.Incoming
+		}
+	} else if span.IsClientSpan() {
+		replacement = unresolved.Outgoing
+	}
+	return unresolvedValue(value, replacement)
+}
+
 func TestRenameUnresolved_OTEL_ServerSide(t *testing.T) {
 	svc := svc.Attrs{
 		UID: svc.UID{Name: "service", Namespace: "service-namespace"},
@@ -149,11 +163,36 @@ func TestRenameUnresolved_OTEL_ServerSide(t *testing.T) {
 			getter := SpanOTELGetters(cfg)
 
 			assert.Equal(t, tt.expectedClient, getVal(t, getter, &tt.input, attr.Client).Value.AsString())
-			assert.Equal(t, tt.expectedClientAddr, getVal(t, getter, &tt.input, attr.ClientAddr).Value.AsString())
+			assert.Equal(t, expectedUnresolvedAddress(&tt.input, true, tt.expectedClientAddr, cfg), getVal(t, getter, &tt.input, attr.ClientAddr).Value.AsString())
 			assert.Equal(t, tt.expectedServer, getVal(t, getter, &tt.input, attr.Server).Value.AsString())
-			assert.Equal(t, tt.expectedServerAddr, getVal(t, getter, &tt.input, attr.ServerAddr).Value.AsString())
+			assert.Equal(t, expectedUnresolvedAddress(&tt.input, false, tt.expectedServerAddr, cfg), getVal(t, getter, &tt.input, attr.ServerAddr).Value.AsString())
 			assert.Equal(t, tt.expectedClientNamespace, getVal(t, getter, &tt.input, attr.ClientNamespace).Value.AsString())
 			assert.Equal(t, tt.expectedServerNamespace, getVal(t, getter, &tt.input, attr.ServerNamespace).Value.AsString())
+		})
+	}
+}
+
+func TestRenameUnresolvedMasksAddressAttributes(t *testing.T) {
+	unresolved := UnresolvedNames{Generic: "generic", Incoming: "incoming", Outgoing: "outgoing"}
+	for _, tc := range []struct {
+		name        string
+		span        Span
+		client, srv string
+	}{
+		{name: "client span", span: Span{Type: EventTypeHTTPClient, HostName: "api.example", PeerName: "192.0.2.1"}, client: "generic", srv: "api.example"},
+		{name: "server span", span: Span{Type: EventTypeHTTP, HostName: "192.0.2.1", PeerName: "192.0.2.2"}, client: "incoming", srv: "generic"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			otel := SpanOTELGetters(unresolved)
+			assert.Equal(t, tc.client, getVal(t, otel, &tc.span, attr.ClientAddr).Value.AsString())
+			assert.Equal(t, tc.srv, getVal(t, otel, &tc.span, attr.ServerAddr).Value.AsString())
+			prom := SpanPromGetters(unresolved)
+			clientGetter, ok := prom(attr.ClientAddr)
+			require.True(t, ok)
+			serverGetter, ok := prom(attr.ServerAddr)
+			require.True(t, ok)
+			assert.Equal(t, tc.client, clientGetter(&tc.span))
+			assert.Equal(t, tc.srv, serverGetter(&tc.span))
 		})
 	}
 }
@@ -315,9 +354,9 @@ func TestRenameUnresolved_OTEL_ClientSide(t *testing.T) {
 			getter := SpanOTELGetters(cfg)
 
 			assert.Equal(t, tt.expectedClient, getVal(t, getter, &tt.input, attr.Client).Value.AsString())
-			assert.Equal(t, tt.expectedClientAddr, getVal(t, getter, &tt.input, attr.ClientAddr).Value.AsString())
+			assert.Equal(t, expectedUnresolvedAddress(&tt.input, true, tt.expectedClientAddr, cfg), getVal(t, getter, &tt.input, attr.ClientAddr).Value.AsString())
 			assert.Equal(t, tt.expectedServer, getVal(t, getter, &tt.input, attr.Server).Value.AsString())
-			assert.Equal(t, tt.expectedServerAddr, getVal(t, getter, &tt.input, attr.ServerAddr).Value.AsString())
+			assert.Equal(t, expectedUnresolvedAddress(&tt.input, false, tt.expectedServerAddr, cfg), getVal(t, getter, &tt.input, attr.ServerAddr).Value.AsString())
 			assert.Equal(t, tt.expectedClientNamespace, getVal(t, getter, &tt.input, attr.ClientNamespace).Value.AsString())
 			assert.Equal(t, tt.expectedServerNamespace, getVal(t, getter, &tt.input, attr.ServerNamespace).Value.AsString())
 		})
@@ -460,9 +499,9 @@ func TestRenameUnresolved_Prom_ServerSide(t *testing.T) {
 			getter := SpanPromGetters(cfg)
 
 			assert.Equal(t, tt.expectedClient, getVal(t, getter, &tt.input, attr.Client))
-			assert.Equal(t, tt.expectedClientAddr, getVal(t, getter, &tt.input, attr.ClientAddr))
+			assert.Equal(t, expectedUnresolvedAddress(&tt.input, true, tt.expectedClientAddr, cfg), getVal(t, getter, &tt.input, attr.ClientAddr))
 			assert.Equal(t, tt.expectedServer, getVal(t, getter, &tt.input, attr.Server))
-			assert.Equal(t, tt.expectedServerAddr, getVal(t, getter, &tt.input, attr.ServerAddr))
+			assert.Equal(t, expectedUnresolvedAddress(&tt.input, false, tt.expectedServerAddr, cfg), getVal(t, getter, &tt.input, attr.ServerAddr))
 			assert.Equal(t, tt.expectedClientNamespace, getVal(t, getter, &tt.input, attr.ClientNamespace))
 			assert.Equal(t, tt.expectedServerNamespace, getVal(t, getter, &tt.input, attr.ServerNamespace))
 		})
@@ -626,9 +665,9 @@ func TestRenameUnresolved_Prom_ClientSide(t *testing.T) {
 			getter := SpanPromGetters(cfg)
 
 			assert.Equal(t, tt.expectedClient, getVal(t, getter, &tt.input, attr.Client))
-			assert.Equal(t, tt.expectedClientAddr, getVal(t, getter, &tt.input, attr.ClientAddr))
+			assert.Equal(t, expectedUnresolvedAddress(&tt.input, true, tt.expectedClientAddr, cfg), getVal(t, getter, &tt.input, attr.ClientAddr))
 			assert.Equal(t, tt.expectedServer, getVal(t, getter, &tt.input, attr.Server))
-			assert.Equal(t, tt.expectedServerAddr, getVal(t, getter, &tt.input, attr.ServerAddr))
+			assert.Equal(t, expectedUnresolvedAddress(&tt.input, false, tt.expectedServerAddr, cfg), getVal(t, getter, &tt.input, attr.ServerAddr))
 			assert.Equal(t, tt.expectedClientNamespace, getVal(t, getter, &tt.input, attr.ClientNamespace))
 			assert.Equal(t, tt.expectedServerNamespace, getVal(t, getter, &tt.input, attr.ServerNamespace))
 		})

@@ -273,8 +273,9 @@ func protocolSelected(list []instrumentations.Instrumentation, mapping protocolM
 
 func captureRuntimes(cfg *obi.Config) schema.CaptureRuntimes {
 	return schema.CaptureRuntimes{
-		Go: schema.Runtime{
-			Enabled: !cfg.Discovery.SkipGoSpecificTracers,
+		Go: schema.GoRuntime{
+			Enabled:        !cfg.Discovery.SkipGoSpecificTracers,
+			MaxPclntabSize: cfg.Discovery.GoMaxPclntabSize,
 		},
 		NodeJS: schema.Runtime{
 			Enabled: cfg.NodeJS.Enabled,
@@ -618,6 +619,7 @@ func enrich(cfg *obi.Config) *schema.Enrich {
 			Kubernetes: schema.KubernetesEnricher{
 				Mode:                v2KubernetesMode(cfg.Attributes.Kubernetes.Enable),
 				ClusterName:         cfg.Attributes.Kubernetes.ClusterName,
+				PodEventQueueSize:   cfg.Attributes.Kubernetes.PodEventQueueSize,
 				ServiceNameTemplate: cfg.Attributes.Kubernetes.ServiceNameTemplate,
 				Auth: schema.KubernetesAuth{
 					KubeconfigPath: cfg.Attributes.Kubernetes.KubeconfigPath,

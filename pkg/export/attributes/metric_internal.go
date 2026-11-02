@@ -22,6 +22,7 @@ type InternalMetrics struct {
 	OTELTraceExportErrors    Name
 	InstrumentedProcesses    Name
 	InstrumentationErrors    Name
+	GoInspectionSkipped      Name
 	AvoidedServices          Name
 	BuildInfo                Name
 	BpfProbeLatency          Name
@@ -36,6 +37,7 @@ type InternalMetrics struct {
 	QueueLength              Name
 	LargeBufferDroppedBytes  Name
 	TraceSpansDropped        Name
+	KubePodEventsDropped     Name
 }
 
 func NewInternalMetrics(prefix string) InternalMetrics {
@@ -67,6 +69,10 @@ func NewInternalMetrics(prefix string) InternalMetrics {
 		}),
 		InstrumentationErrors: metric(Name{
 			OTEL: prefix + ".instrumentation.errors",
+			Type: InstrumentCounter,
+		}),
+		GoInspectionSkipped: metric(Name{
+			OTEL: prefix + ".go.inspection.skipped",
 			Type: InstrumentCounter,
 		}),
 		AvoidedServices: metric(Name{
@@ -132,6 +138,11 @@ func NewInternalMetrics(prefix string) InternalMetrics {
 		}),
 		TraceSpansDropped: metric(Name{
 			OTEL: prefix + ".otel.trace.spans.dropped",
+			Unit: "1",
+			Type: InstrumentCounter,
+		}),
+		KubePodEventsDropped: metric(Name{
+			OTEL: prefix + ".kube.pod.events.dropped",
 			Unit: "1",
 			Type: InstrumentCounter,
 		}),

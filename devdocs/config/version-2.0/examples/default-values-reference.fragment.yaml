@@ -383,6 +383,9 @@ extensions:
         # to generic network-only instrumentation.
         go:
           enabled: true
+          # Maximum uncompressed .gopclntab bytes for Go offset inspection.
+          # Zero disables the limit; larger tables use generic instrumentation.
+          max_pclntab_size: 0
           # Reserved; keep empty.
           filter: {}
         # Node.js runtime instrumentation allows Node.js services to be instrumented via
@@ -583,6 +586,8 @@ extensions:
           # Receiver configurations must omit enrich entirely and use Collector processors.
           mode: autodetect
           cluster_name: ""
+          # Maximum pending pod metadata events in each queue; new events are dropped when full.
+          pod_event_queue_size: 1024
           auth:
             kubeconfig_path: ""
           # Informer cache/sync controls.

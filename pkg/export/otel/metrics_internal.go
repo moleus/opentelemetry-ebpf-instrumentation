@@ -57,8 +57,10 @@ type InternalMetricsReporter struct {
 
 	queueCapacityRatio      instrument.Float64Gauge
 	queueLength             instrument.Int64Gauge
+	goInspectionSkipped     instrument.Int64Counter
 	largeBufferDroppedBytes instrument.Int64Counter
 	traceSpansDropped       instrument.Int64Counter
+	kubePodEventsDropped    instrument.Int64Counter
 
 	internalAttrs attr.InternalAttributes
 }
@@ -245,6 +247,12 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 	if err != nil {
 		return nil, err
 	}
+	goInspectionSkipped, err := meter.Int64Counter(
+		internalNames.GoInspectionSkipped.OTEL,
+		instrument.WithDescription("Go offset inspections skipped by reason"))
+	if err != nil {
+		return nil, err
+	}
 	largeBufferDroppedBytes, err := meter.Int64Counter(
 		internalNames.LargeBufferDroppedBytes.OTEL,
 		instrument.WithDescription("Payload bytes discarded after a configured per-request large buffer cap is reached"),
@@ -256,6 +264,13 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 		internalNames.TraceSpansDropped.OTEL,
 		instrument.WithDescription("Trace spans rejected by the configured trace exporter queue"),
 		instrument.WithUnit(internalNames.TraceSpansDropped.Unit))
+	if err != nil {
+		return nil, err
+	}
+	kubePodEventsDropped, err := meter.Int64Counter(
+		internalNames.KubePodEventsDropped.OTEL,
+		instrument.WithDescription("Kubernetes Pod metadata events dropped because a bounded queue was full"),
+		instrument.WithUnit(internalNames.KubePodEventsDropped.Unit))
 	if err != nil {
 		return nil, err
 	}
@@ -282,8 +297,10 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 		bpfRingbufFailures:               bpfRingbufFailures,
 		queueCapacityRatio:               queueCapacityRatio,
 		queueLength:                      queueLength,
+		goInspectionSkipped:              goInspectionSkipped,
 		largeBufferDroppedBytes:          largeBufferDroppedBytes,
 		traceSpansDropped:                traceSpansDropped,
+		kubePodEventsDropped:             kubePodEventsDropped,
 		internalAttrs:                    internalAttrs,
 	}, nil
 }
@@ -454,6 +471,10 @@ func (p *InternalMetricsReporter) BPFRingbufWriteCounts(ringbuf string, writes, 
 	p.bpfRingbufFailures.Add(p.ctx, int64(failures), attrs)
 }
 
+func (p *InternalMetricsReporter) GoInspectionSkipped(reason string) {
+	p.goInspectionSkipped.Add(p.ctx, 1, sanitizedAttributes(attribute.String(attr.VendorPrefix+".go.inspection.skip.reason", reason)))
+}
+
 func (p *InternalMetricsReporter) LargeBufferDroppedBytes(bytes uint64) {
 	p.largeBufferDroppedBytes.Add(p.ctx, int64(bytes))
 }
@@ -464,6 +485,10 @@ func (p *InternalMetricsReporter) QueueLength(subscriber string, length int) {
 
 func (p *InternalMetricsReporter) OTELTraceSpansDropped(spans int) {
 	p.traceSpansDropped.Add(p.ctx, int64(spans))
+}
+
+func (p *InternalMetricsReporter) KubePodEventsDropped(queue string) {
+	p.kubePodEventsDropped.Add(p.ctx, 1, sanitizedAttributes(attribute.String("queue", queue)))
 }
 
 func (p *InternalMetricsReporter) QueueBufferUtilization(subscriber string, ratio float64) {

@@ -29,6 +29,23 @@ func connFD(t *testing.T, c syscall.Conn) int {
 	return fd
 }
 
+func TestCanBackfillSocketsRequiresExplicitOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "true", want: true},
+		{value: "", want: false},
+		{value: "false", want: false},
+	} {
+		t.Setenv("OTEL_EBPF_TPINJECTOR_PIDFD_GETFD", tc.value)
+		assert.Equal(t, tc.want, pidfdGetfdOptedIn())
+	}
+
+	t.Setenv("OTEL_EBPF_TPINJECTOR_PIDFD_GETFD", "")
+	assert.False(t, (&Tracer{}).canBackfillSockets())
+}
+
 // only the connecting side of a TCP connection is a client socket to backfill
 func TestBackfillSelectsOnlyClientTCPSockets(t *testing.T) {
 	lsn, err := net.Listen("tcp", "127.0.0.1:0")

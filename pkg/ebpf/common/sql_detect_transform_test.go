@@ -376,3 +376,28 @@ func TestFirstSQLRun(t *testing.T) {
 		assert.Equal(t, 8, firstSQLRun(buf, 8))
 	})
 }
+
+func TestSQLKeywordRequiresTokenBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload string
+		wantOp  string
+	}{
+		{"vm native host insert", "\x00insert-hot-.example.internal:8480/insert/0/prometheus/api/v1/write", ""},
+		{"vm native host alter", "\x00alter-models-fieldsteam\x01A'", ""},
+		{"embedded token followed by a dash", "myINSERT-x INTO example", ""},
+		{"valid insert", "\x00INSERT INTO example VALUES (1)", "INSERT"},
+		{"letter as protocol length byte", "\x00\x00\x00rSELECT 1", "SELECT"},
+		{"keyword followed by a letter", "UPDATES x SET a = 1", ""},
+		{"valid select", "\x00SELECT * FROM example", "SELECT"},
+		{"valid select star", "SELECT* FROM example", "SELECT"},
+		{"valid select newline", "SELECT\n* FROM example", "SELECT"},
+		{"valid SQL comment", "SELECT/* hint */ * FROM example", "SELECT"},
+		{"URI insert segment", "GET /insert/0/prometheus/api/v1/write", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op, _, _ := detectSQL([]byte(tc.payload))
+			require.Equal(t, tc.wantOp, op)
+		})
+	}
+}

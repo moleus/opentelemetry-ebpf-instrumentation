@@ -5,6 +5,7 @@ package discover // import "go.opentelemetry.io/obi/pkg/appolly/discover"
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	stdmaps "maps"
@@ -325,7 +326,7 @@ func (ta *traceAttacher) getTracer(ctx context.Context, ie *ebpf.Instrumentable)
 		// gets all the possible supported tracers for a go program, and filters out
 		// those whose symbols are not present in the ELF functions list
 		if ta.Cfg.Discovery.SkipGoSpecificTracers || ie.InstrumentationError != nil || ie.Offsets == nil {
-			if !ta.Cfg.Discovery.SkipGoSpecificTracers {
+			if !ta.Cfg.Discovery.SkipGoSpecificTracers && !errors.Is(ie.InstrumentationError, errGoInspectionSizeLimit) {
 				if ie.InstrumentationError != nil {
 					ta.log.Warn("Unsupported Go program detected, using generic instrumentation", "error", ie.InstrumentationError)
 				} else if ie.Offsets == nil {

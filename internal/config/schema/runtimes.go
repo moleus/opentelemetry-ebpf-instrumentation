@@ -5,9 +5,17 @@ package schema // import "go.opentelemetry.io/obi/internal/config/schema"
 
 // CaptureRuntimes groups language runtime capture settings.
 type CaptureRuntimes struct {
-	Go     Runtime     `yaml:"go"`
+	Go     GoRuntime   `yaml:"go"`
 	NodeJS Runtime     `yaml:"nodejs"`
 	Java   JavaRuntime `yaml:"java"`
+}
+
+// GoRuntime describes Go capture and offset inspection limits.
+type GoRuntime struct {
+	Enabled bool             `yaml:"enabled"`
+	Filter  AttributeFilters `yaml:"filter,omitempty"`
+	// MaxPclntabSize is the maximum uncompressed .gopclntab size in bytes; zero disables the limit.
+	MaxPclntabSize uint64 `yaml:"max_pclntab_size,omitempty"`
 }
 
 // Runtime describes generic language runtime capture settings.

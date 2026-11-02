@@ -27,6 +27,7 @@ func TestInternalPrometheusNames(t *testing.T) {
 		{internal.OTELTraceExportErrors, "obi_otel_trace_export_errors_total"},
 		{internal.InstrumentedProcesses, "obi_instrumented_processes"},
 		{internal.InstrumentationErrors, "obi_instrumentation_errors_total"},
+		{internal.GoInspectionSkipped, "obi_go_inspection_skipped_total"},
 		{internal.AvoidedServices, "obi_avoided_services"},
 		{internal.BuildInfo, "obi_internal_build_info"},
 		{internal.BpfProbeLatency, "obi_bpf_probe_latency_seconds"},
@@ -41,6 +42,7 @@ func TestInternalPrometheusNames(t *testing.T) {
 		{internal.QueueLength, "obi_queue_length"},
 		{internal.LargeBufferDroppedBytes, "obi_large_buffer_dropped_bytes_total"},
 		{internal.TraceSpansDropped, "obi_otel_trace_spans_dropped_total"},
+		{internal.KubePodEventsDropped, "obi_kube_pod_events_dropped_total"},
 	}
 
 	for _, test := range tests {
@@ -73,6 +75,7 @@ func TestInternalMetricsAllDeclared(t *testing.T) {
 		"OTELTraceExportErrors":    internal.OTELTraceExportErrors,
 		"InstrumentedProcesses":    internal.InstrumentedProcesses,
 		"InstrumentationErrors":    internal.InstrumentationErrors,
+		"GoInspectionSkipped":      internal.GoInspectionSkipped,
 		"AvoidedServices":          internal.AvoidedServices,
 		"BuildInfo":                internal.BuildInfo,
 		"BpfProbeLatency":          internal.BpfProbeLatency,
@@ -87,6 +90,7 @@ func TestInternalMetricsAllDeclared(t *testing.T) {
 		"QueueLength":              internal.QueueLength,
 		"LargeBufferDroppedBytes":  internal.LargeBufferDroppedBytes,
 		"TraceSpansDropped":        internal.TraceSpansDropped,
+		"KubePodEventsDropped":     internal.KubePodEventsDropped,
 	} {
 		t.Run(name, func(t *testing.T) {
 			require.NotEmpty(t, m.OTEL, "OTEL name must be set")

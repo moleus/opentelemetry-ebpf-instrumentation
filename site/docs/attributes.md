@@ -72,10 +72,12 @@ Attributes carried by OBI's own internal (obi.*) OTLP metrics. Keys are namespac
 | `bpf.probe.id` | string | development | Identifier of the eBPF program (probe) the stats belong to. | 42 |
 | `bpf.probe.name` | string | development | Name of the eBPF probe. | kprobe_tcp_sendmsg |
 | `bpf.probe.type` | string | development | eBPF program type of the probe. | kprobe; tracepoint |
+| `obi.go.inspection.skip.reason` | enum | development | Reason Go offset inspection was skipped. | pclntab_too_large |
 | `obi.goarch` | string | development | Go build target architecture (runtime.GOARCH). | amd64; arm64 |
 | `obi.goos` | string | development | Go build target OS (runtime.GOOS). | linux |
 | `obi.goversion` | string | development | Go toolchain version OBI was built with (runtime.Version()). | go1.25.11 |
 | `otel.metric.overflow` | boolean | development | Set by the OpenTelemetry SDK cardinality limiter when the avoided-services attribute set overflows its configured limit. |  |
+| `queue` | string | development | Name of the Kubernetes Pod event queue that dropped an event. | discovery; process_events |
 | `subscriber` | string | development | Name of the pipeline stage consuming the internal queue, as given to msg.SubscriberName when the stage subscribed. Subscribers that do not provide a name fall back to the name of the queue they subscribed to. | discover.CriteriaMatcher; traceAttacher |
 | `telemetry.type` | string | development | Which OBI pipeline avoided instrumenting a service that already has OpenTelemetry instrumentation. Value is "metrics" or "traces". | metrics; traces |
 

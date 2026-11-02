@@ -4,8 +4,11 @@
 package discover
 
 import (
+	"bytes"
+	"debug/elf"
 	"iter"
 	"log/slog"
+	"strings"
 	"testing"
 
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -18,6 +21,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/appolly/services"
 	"go.opentelemetry.io/obi/pkg/export"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/gotracer"
 	"go.opentelemetry.io/obi/pkg/internal/goexec"
@@ -540,4 +544,78 @@ func TestAsInstrumentable_UncachedPythonWorkerPreservesLogEnricherEnabled(t *tes
 	assert.Same(t, worker, instrumentable.FileInfo)
 	assert.Same(t, master, worker.RuntimeMetricServiceSource())
 	assert.True(t, instrumentable.LogEnricherEnabled)
+}
+
+type inspectionSkipReporter struct {
+	imetrics.NoopReporter
+	reasons []string
+}
+
+func (r *inspectionSkipReporter) GoInspectionSkipped(reason string) {
+	r.reasons = append(r.reasons, reason)
+}
+
+func TestGoInspectionSizeLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		limit, size uint64
+		skip        bool
+	}{
+		{"disabled", 0, 101, false},
+		{"below", 100, 99, false},
+		{"at", 100, 100, false},
+		{"above", 100, 101, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			reporter := &inspectionSkipReporter{}
+			ty := typer{
+				cfg: &obi.Config{Discovery: services.DiscoveryConfig{GoMaxPclntabSize: tc.limit}},
+				log: slog.New(slog.NewTextHandler(&logs, nil)), metrics: reporter,
+			}
+			// NOBITS has no data: permitted inspections return a section read error.
+			ef := &elf.File{Sections: []*elf.Section{{SectionHeader: elf.SectionHeader{Name: ".gopclntab", Type: elf.SHT_NOBITS, Size: tc.size}}}}
+			fi := exec.New(exec.Init{CmdExePath: "/test/large-go", ELF: ef})
+			offsets, ok, err := ty.inspectOffsets(fi)
+			assert.Nil(t, offsets)
+			assert.False(t, ok)
+			if tc.skip {
+				require.ErrorIs(t, err, errGoInspectionSizeLimit)
+				assert.Equal(t, []string{"pclntab_too_large"}, reporter.reasons)
+				assert.Equal(t, 1, strings.Count(logs.String(), "level=WARN"))
+				assert.Contains(t, logs.String(), "exe=/test/large-go")
+				assert.Contains(t, logs.String(), "pclntab_size=101")
+			} else {
+				require.Error(t, err)
+				assert.NotErrorIs(t, err, errGoInspectionSizeLimit)
+				assert.Empty(t, reporter.reasons)
+				assert.Empty(t, logs.String())
+			}
+		})
+	}
+}
+
+func TestGoInspectionSizeLimitCachedFallback(t *testing.T) {
+	orig := findProcLanguage
+	findProcLanguage = func(app.PID) svc.InstrumentableType { return svc.InstrumentableGolang }
+	t.Cleanup(func() { findProcLanguage = orig })
+	cache, err := lru.New[cacheKey, instrumentedExecutable](100)
+	require.NoError(t, err)
+	var logs bytes.Buffer
+	reporter := &inspectionSkipReporter{}
+	ty := typer{
+		cfg: &obi.Config{Discovery: services.DiscoveryConfig{GoMaxPclntabSize: 100}},
+		log: slog.New(slog.NewTextHandler(&logs, nil)), metrics: reporter,
+		instrumentableCache: cache, currentPids: map[app.PID]*exec.FileInfo{},
+	}
+	ef := &elf.File{Sections: []*elf.Section{{SectionHeader: elf.SectionHeader{Name: ".gopclntab", Size: 101}}}}
+	for _, pid := range []app.PID{10, 11} {
+		fi := exec.New(exec.Init{Pid: pid, Dev: 1, Ino: 2, CmdExePath: "/test/large-go", ELF: ef})
+		inst := ty.asInstrumentable(fi)
+		assert.Equal(t, svc.InstrumentableGolang, inst.Type)
+		assert.Nil(t, inst.Offsets)
+		assert.ErrorIs(t, inst.InstrumentationError, errGoInspectionSizeLimit)
+	}
+	assert.Equal(t, []string{"pclntab_too_large"}, reporter.reasons)
+	assert.Equal(t, 1, strings.Count(logs.String(), "level=WARN"))
 }

@@ -1863,6 +1863,7 @@ func applyV2Runtimes(cfg *obi.Config, runtimes schema.CaptureRuntimes, complete 
 
 func applyFullV2Runtimes(cfg *obi.Config, runtimes schema.CaptureRuntimes) {
 	cfg.Discovery.SkipGoSpecificTracers = !runtimes.Go.Enabled
+	cfg.Discovery.GoMaxPclntabSize = runtimes.Go.MaxPclntabSize
 	cfg.NodeJS.Enabled = runtimes.NodeJS.Enabled
 	cfg.Java.Enabled = runtimes.Java.Enabled
 	cfg.Java.Debug = runtimes.Java.Debug.Enabled
@@ -1871,6 +1872,9 @@ func applyFullV2Runtimes(cfg *obi.Config, runtimes schema.CaptureRuntimes) {
 }
 
 func applyPartialV2Runtimes(cfg *obi.Config, runtimes schema.CaptureRuntimes) {
+	if runtimes.Go.MaxPclntabSize != 0 {
+		cfg.Discovery.GoMaxPclntabSize = runtimes.Go.MaxPclntabSize
+	}
 	if runtimes.Go.Enabled {
 		cfg.Discovery.SkipGoSpecificTracers = false
 	}
@@ -1988,6 +1992,7 @@ func applyV2KubernetesEnricher(cfg *obi.Config, enrich *schema.Enrich, complete 
 func applyFullV2KubernetesEnricher(cfg *obi.Config, kubernetes schema.KubernetesEnricher) {
 	cfg.Attributes.Kubernetes.Enable = runtimeKubernetesMode(kubernetes.Mode)
 	cfg.Attributes.Kubernetes.ClusterName = kubernetes.ClusterName
+	cfg.Attributes.Kubernetes.PodEventQueueSize = kubernetes.PodEventQueueSize
 	cfg.Attributes.Kubernetes.KubeconfigPath = kubernetes.Auth.KubeconfigPath
 	cfg.Attributes.Kubernetes.InformersSyncTimeout = kubernetes.Informers.InitialSyncTimeout.TimeDuration()
 	cfg.Attributes.Kubernetes.ReconnectInitialInterval = kubernetes.Informers.ReconnectInitialInterval.TimeDuration()
@@ -2008,6 +2013,9 @@ func applyPartialV2KubernetesEnricher(cfg *obi.Config, kubernetes schema.Kuberne
 	}
 	if kubernetes.ClusterName != "" {
 		cfg.Attributes.Kubernetes.ClusterName = kubernetes.ClusterName
+	}
+	if kubernetes.PodEventQueueSize > 0 {
+		cfg.Attributes.Kubernetes.PodEventQueueSize = kubernetes.PodEventQueueSize
 	}
 	if kubernetes.ServiceNameTemplate != "" {
 		cfg.Attributes.Kubernetes.ServiceNameTemplate = kubernetes.ServiceNameTemplate

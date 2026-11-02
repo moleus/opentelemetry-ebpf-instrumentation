@@ -3,7 +3,10 @@
 
 package sampler
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // limiter is a token bucket for one goroutine. The rate and the burst are passed on every call,
 // so a rules change applies at once; the tokens are kept within the new burst.
@@ -13,8 +16,12 @@ type limiter struct {
 }
 
 func (l *limiter) allow(now time.Time, perSecond, burst float64) bool {
-	if perSecond <= 0 {
-		return true
+	if perSecond == 0 {
+		return true // explicitly disabled rate limiting
+	}
+	if perSecond < 0 || math.IsNaN(perSecond) || math.IsInf(perSecond, 0) ||
+		burst < 0 || math.IsNaN(burst) || math.IsInf(burst, 0) {
+		return false
 	}
 	// a rate below 1/s still lets one span through
 	burst = max(burst, 1)

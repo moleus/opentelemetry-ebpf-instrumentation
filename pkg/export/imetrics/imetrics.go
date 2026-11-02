@@ -83,6 +83,8 @@ type Reporter interface {
 	UninstrumentProcess(processName string)
 	// InstrumentationError is invoked every time an instrumentation attempt fails
 	InstrumentationError(processName string, errorType string)
+	// GoInspectionSkipped counts Go offset inspections skipped by a size limit.
+	GoInspectionSkipped(reason string)
 	// AvoidInstrumentationMetrics is invoked every time a service is avoided due to OTLP metrics detection
 	AvoidInstrumentationMetrics(serviceName, serviceNamespace, serviceInstanceID string)
 	// AvoidInstrumentationTraces is invoked every time a service is avoided due to OTLP traces detection
@@ -125,6 +127,13 @@ func IsBuiltinNoopReporter(reporter Reporter) bool {
 	}
 }
 
+// ReportKubePodEventsDropped records a dropped Pod event when the configured reporter supports it.
+func ReportKubePodEventsDropped(reporter Reporter, queue string) {
+	if dropReporter, ok := reporter.(interface{ KubePodEventsDropped(string) }); ok {
+		dropReporter.KubePodEventsDropped(queue)
+	}
+}
+
 // NoopReporter is a metrics Reporter that just does nothing
 type NoopReporter struct{}
 
@@ -138,6 +147,7 @@ func (n NoopReporter) PrometheusRequest(_, _ string)                            
 func (n NoopReporter) InstrumentProcess(_ string)                                              {}
 func (n NoopReporter) UninstrumentProcess(_ string)                                            {}
 func (n NoopReporter) InstrumentationError(_, _ string)                                        {}
+func (n NoopReporter) GoInspectionSkipped(_ string)                                            {}
 func (n NoopReporter) AvoidInstrumentationMetrics(_, _, _ string)                              {}
 func (n NoopReporter) AvoidInstrumentationTraces(_, _, _ string)                               {}
 func (n NoopReporter) BpfProbeStats(_, _, _ string, _ uint64, _ float64, _ map[float64]uint64) {}
@@ -149,3 +159,4 @@ func (n NoopReporter) BPFPacketStats(_, _ uint64)                               
 func (n NoopReporter) BPFRingbufWriteCounts(_ string, _, _ uint64)                             {}
 func (n NoopReporter) QueueBufferUtilization(_ string, _ float64)                              {}
 func (n NoopReporter) LargeBufferDroppedBytes(_ uint64)                                        {}
+func (n NoopReporter) KubePodEventsDropped(_ string)                                           {}

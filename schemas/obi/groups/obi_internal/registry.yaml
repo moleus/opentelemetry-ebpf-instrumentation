@@ -1,5 +1,14 @@
 file_format: definition/2
 attributes:
+  - key: obi.go.inspection.skip.reason
+    type:
+      members:
+        - id: pclntab_too_large
+          value: pclntab_too_large
+          stability: development
+    stability: development
+    brief: Reason Go offset inspection was skipped.
+
   - key: source
     type: string
     stability: development
@@ -105,6 +114,12 @@ attributes:
       provide a name fall back to the name of the queue they subscribed to.
     examples: ["discover.CriteriaMatcher", "traceAttacher"]
 
+  - key: queue
+    type: string
+    stability: development
+    brief: Name of the Kubernetes Pod event queue that dropped an event.
+    examples: ["discovery", "process_events"]
+
   - key: telemetry.type
     annotations:
       obi:
@@ -175,6 +190,7 @@ attribute_groups:
       directly rather than declaring an OBI-specific alias.
     stability: development
     attributes:
+      - ref: obi.go.inspection.skip.reason
       - ref: obi.goarch
       - ref: obi.goos
       - ref: obi.goversion
@@ -185,5 +201,6 @@ attribute_groups:
       - ref: bpf.map.type
       - ref: bpf.map.name
       - ref: subscriber
+      - ref: queue
       - ref: telemetry.type
       - ref: otel.metric.overflow

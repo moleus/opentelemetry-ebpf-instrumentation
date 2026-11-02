@@ -33,7 +33,10 @@ const unknownTopicName = "*"
 
 type PartitionInfo struct {
 	Partition int
-	Offset    int64
+	// Offset is the *requested FetchOffset* from a Kafka FetchRequest, not
+	// the offset of a received or processed Kafka record. It must not be
+	// exported as messaging.kafka.offset.
+	Offset int64
 }
 
 type KafkaInfo struct {
@@ -51,7 +54,9 @@ func (k Operation) String() string {
 	case Produce:
 		return request.MessagingSend
 	case Fetch:
-		return request.MessagingProcess
+		// A FetchRequest is a network poll. OBI cannot observe application
+		// processing or count the records returned by the broker here.
+		return request.MessagingReceive
 	default:
 		return "unknown"
 	}
@@ -247,7 +252,9 @@ func kafkaMessagingInfo(data *KafkaInfo) *request.MessagingInfo {
 	if data.PartitionInfo != nil {
 		info.HasPartition = true
 		info.Partition = data.PartitionInfo.Partition
-		info.Offset = data.PartitionInfo.Offset
+		// Intentionally do not set MessagingInfo.Offset. A FetchRequest
+		// holds the consumer's requested starting offset, not a record offset.
+		// The receive span must not publish messaging.kafka.offset.
 	}
 	return info
 }
@@ -259,7 +266,12 @@ func TCPToKafkaToSpan(trace *TCPRequestInfo, data *KafkaInfo) request.Span {
 
 	if trace.ConnInfo.S_port != 0 || trace.ConnInfo.D_port != 0 {
 		peer, hostname = (*BPFConnInfo)(unsafe.Pointer(&trace.ConnInfo)).reqHostInfo()
-		hostPort = int(trace.ConnInfo.D_port)
+		// When no destination address was captured (e.g. a TLS connection
+		// represented by an SSL pointer), a nonzero port alone cannot be
+		// attributed to the Kafka broker. Do not export phantom server.port.
+		if hostname != "" {
+			hostPort = int(trace.ConnInfo.D_port)
+		}
 	}
 
 	reqType := request.EventTypeKafkaClient
@@ -275,7 +287,7 @@ func TCPToKafkaToSpan(trace *TCPRequestInfo, data *KafkaInfo) request.Span {
 		Statement:     data.ClientID,
 		Path:          data.Topic,
 		Peer:          peer,
-		PeerPort:      int(trace.ConnInfo.S_port),
+		PeerPort:      kafkaPeerPort(peer, trace.ConnInfo.S_port),
 		Host:          hostname,
 		HostPort:      hostPort,
 		ContentLength: 0,
@@ -294,4 +306,13 @@ func TCPToKafkaToSpan(trace *TCPRequestInfo, data *KafkaInfo) request.Span {
 		},
 		MessagingInfo: messagingInfo,
 	}
+}
+
+// kafkaPeerPort does not make a network endpoint out of a port without an IP.
+// A high port (including 52428) is not evidence of corruption by itself.
+func kafkaPeerPort(peer string, port uint16) int {
+	if peer == "" {
+		return 0
+	}
+	return int(port)
 }
