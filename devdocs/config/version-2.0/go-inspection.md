@@ -18,8 +18,10 @@ extensions:
 ```
 
 With environment-based runtime configuration, use
-`OTEL_EBPF_GO_MAX_PCLNTAB_SIZE`. Config v2 reads that variable through the
-explicit substitution above. There is no new Config v1 YAML field.
+`OTEL_EBPF_GO_MAX_PCLNTAB_SIZE`. The variable accepts bytes (`67108864`) or a
+number with a unit (`64MiB`, `1.5GiB`, `512k`; units are powers of 1024). Config v2
+reads that variable through the explicit substitution above, so there the value
+must be a plain number of bytes. There is no new Config v1 YAML field.
 
 A section larger than the limit bypasses Go offset inspection and uses the
 existing generic instrumentation path. This loses Go-specific probes, including
@@ -28,9 +30,12 @@ supported traffic, but do not provide equivalent coverage.
 
 OBI writes one warning per uncached executable inspection with the executable
 path, section size, and limit. It increments the internal Prometheus counter
-`obi_go_inspection_skipped_total{reason="pclntab_too_large"}`. The counter has no
-path or PID label. With the OTEL internal exporter, the metric is
-`obi.go.inspection.skipped` and the attribute is `obi.go.inspection.skip.reason`.
+`obi_go_inspection_skipped_total{process_executable_name="<name>",reason="pclntab_too_large"}`.
+The name is the base name of the executable. The counter has no path or PID label.
+OBI reports at most 64 distinct names; later names are reported as `other`, so the
+label stays bounded on a node that runs many different binaries. With the OTEL
+internal exporter, the metric is `obi.go.inspection.skipped` and the attributes are
+`process.executable.name` and `obi.go.inspection.skip.reason`.
 The executable cache avoids counting each process instance. Eviction, process
 removal, or an OBI restart can cause a later inspection to count again.
 
@@ -38,7 +43,7 @@ The counter records skipped inspections, not failed attachments or skipped
 processes. For example, show skips in the current OBI lifetimes with:
 
 ```promql
-sum by (reason) (obi_go_inspection_skipped_total)
+sum by (process_executable_name) (obi_go_inspection_skipped_total)
 ```
 
 A query using `increase` can miss increments before the first Prometheus scrape,

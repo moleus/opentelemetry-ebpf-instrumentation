@@ -175,8 +175,8 @@ func NewPrometheusReporter(cfg *InternalMetricsConfig, manager *connector.Promet
 		}, []string{attr.Subscriber.Prom()}),
 		goInspectionSkipped: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: internalNames.GoInspectionSkipped.Prom,
-			Help: "Go offset inspections skipped by reason",
-		}, []string{"reason"}),
+			Help: "Go offset inspections skipped by process executable name and reason",
+		}, []string{attr.ProcessExecutableName.Prom(), "reason"}),
 		largeBufferDroppedBytes: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: internalNames.LargeBufferDroppedBytes.Prom,
 			Help: "Payload bytes discarded after a configured per-request large buffer cap is reached",
@@ -333,8 +333,8 @@ func (p *PrometheusReporter) BPFRingbufWriteCounts(ringbuf string, writes, failu
 	p.bpfRingbufFailures.WithLabelValues(ringbuf).Add(float64(failures))
 }
 
-func (p *PrometheusReporter) GoInspectionSkipped(reason string) {
-	p.goInspectionSkipped.WithLabelValues(reason).Inc()
+func (p *PrometheusReporter) GoInspectionSkipped(processName, reason string) {
+	p.goInspectionSkipped.WithLabelValues(processName, reason).Inc()
 }
 
 func (p *PrometheusReporter) LargeBufferDroppedBytes(bytes uint64) {

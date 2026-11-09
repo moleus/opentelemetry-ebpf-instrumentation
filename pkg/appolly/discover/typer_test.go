@@ -6,6 +6,7 @@ package discover
 import (
 	"bytes"
 	"debug/elf"
+	"fmt"
 	"iter"
 	"log/slog"
 	"strings"
@@ -549,9 +550,11 @@ func TestAsInstrumentable_UncachedPythonWorkerPreservesLogEnricherEnabled(t *tes
 type inspectionSkipReporter struct {
 	imetrics.NoopReporter
 	reasons []string
+	names   []string
 }
 
-func (r *inspectionSkipReporter) GoInspectionSkipped(reason string) {
+func (r *inspectionSkipReporter) GoInspectionSkipped(processName, reason string) {
+	r.names = append(r.names, processName)
 	r.reasons = append(r.reasons, reason)
 }
 
@@ -570,7 +573,7 @@ func TestGoInspectionSizeLimit(t *testing.T) {
 			var logs bytes.Buffer
 			reporter := &inspectionSkipReporter{}
 			ty := typer{
-				cfg: &obi.Config{Discovery: services.DiscoveryConfig{GoMaxPclntabSize: tc.limit}},
+				cfg: &obi.Config{Discovery: services.DiscoveryConfig{GoMaxPclntabSize: services.ByteSize(tc.limit)}},
 				log: slog.New(slog.NewTextHandler(&logs, nil)), metrics: reporter,
 			}
 			// NOBITS has no data: permitted inspections return a section read error.
@@ -582,6 +585,7 @@ func TestGoInspectionSizeLimit(t *testing.T) {
 			if tc.skip {
 				require.ErrorIs(t, err, errGoInspectionSizeLimit)
 				assert.Equal(t, []string{"pclntab_too_large"}, reporter.reasons)
+				assert.Equal(t, []string{"large-go"}, reporter.names)
 				assert.Equal(t, 1, strings.Count(logs.String(), "level=WARN"))
 				assert.Contains(t, logs.String(), "exe=/test/large-go")
 				assert.Contains(t, logs.String(), "pclntab_size=101")
@@ -617,5 +621,19 @@ func TestGoInspectionSizeLimitCachedFallback(t *testing.T) {
 		assert.ErrorIs(t, inst.InstrumentationError, errGoInspectionSizeLimit)
 	}
 	assert.Equal(t, []string{"pclntab_too_large"}, reporter.reasons)
+	assert.Equal(t, []string{"large-go"}, reporter.names)
 	assert.Equal(t, 1, strings.Count(logs.String(), "level=WARN"))
+}
+
+func TestGoInspectionSkipMetricNamesAreBounded(t *testing.T) {
+	ty := typer{}
+	for i := range maxSkippedNames {
+		name := fmt.Sprintf("svc-%d", i)
+		assert.Equal(t, name, ty.skippedMetricName("/usr/bin/"+name))
+	}
+	// A name seen before keeps its own label, a new one shares "other".
+	assert.Equal(t, "svc-0", ty.skippedMetricName("/bin/svc-0"))
+	assert.Equal(t, "other", ty.skippedMetricName("/bin/one-more"))
+	assert.Equal(t, "other", ty.skippedMetricName("/bin/and-another"))
+	assert.Len(t, ty.skippedNames, maxSkippedNames)
 }

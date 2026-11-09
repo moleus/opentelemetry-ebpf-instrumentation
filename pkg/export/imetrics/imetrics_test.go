@@ -279,18 +279,24 @@ func metricLabels(metric *dto.Metric) map[string]string {
 func TestPrometheusGoInspectionSkipped(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	reporter := NewPrometheusReporter(&InternalMetricsConfig{}, nil, registry)
-	reporter.GoInspectionSkipped("pclntab_too_large")
-	reporter.GoInspectionSkipped("pclntab_too_large")
+	reporter.GoInspectionSkipped("keda-admission-webhooks", "pclntab_too_large")
+	reporter.GoInspectionSkipped("keda-admission-webhooks", "pclntab_too_large")
+	reporter.GoInspectionSkipped("other-big", "pclntab_too_large")
 	families, err := registry.Gather()
 	require.NoError(t, err)
 	for _, family := range families {
 		if family.GetName() != "obi_go_inspection_skipped_total" {
 			continue
 		}
-		require.Len(t, family.Metric, 1)
-		metric := family.Metric[0]
-		assert.Equal(t, float64(2), metric.GetCounter().GetValue())
-		assert.Equal(t, map[string]string{"reason": "pclntab_too_large"}, metricLabels(metric))
+		require.Len(t, family.Metric, 2)
+		got := map[string]float64{}
+		for _, metric := range family.Metric {
+			labels := metricLabels(metric)
+			assert.Equal(t, "pclntab_too_large", labels["reason"])
+			assert.Len(t, labels, 2)
+			got[labels["process_executable_name"]] = metric.GetCounter().GetValue()
+		}
+		assert.Equal(t, map[string]float64{"keda-admission-webhooks": 2, "other-big": 1}, got)
 		return
 	}
 	t.Fatal("Go inspection counter was not registered")

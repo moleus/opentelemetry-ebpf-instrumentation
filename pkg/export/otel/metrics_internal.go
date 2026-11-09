@@ -249,7 +249,7 @@ func NewInternalMetricsReporter(ctx context.Context, ctxInfo *global.ContextInfo
 	}
 	goInspectionSkipped, err := meter.Int64Counter(
 		internalNames.GoInspectionSkipped.OTEL,
-		instrument.WithDescription("Go offset inspections skipped by reason"))
+		instrument.WithDescription("Go offset inspections skipped by process executable name and reason"))
 	if err != nil {
 		return nil, err
 	}
@@ -471,8 +471,11 @@ func (p *InternalMetricsReporter) BPFRingbufWriteCounts(ringbuf string, writes, 
 	p.bpfRingbufFailures.Add(p.ctx, int64(failures), attrs)
 }
 
-func (p *InternalMetricsReporter) GoInspectionSkipped(reason string) {
-	p.goInspectionSkipped.Add(p.ctx, 1, sanitizedAttributes(attribute.String(attr.VendorPrefix+".go.inspection.skip.reason", reason)))
+func (p *InternalMetricsReporter) GoInspectionSkipped(processName, reason string) {
+	p.goInspectionSkipped.Add(p.ctx, 1, sanitizedAttributes(
+		attribute.String(string(attr.ProcessExecutableName), processName),
+		attribute.String(attr.VendorPrefix+".go.inspection.skip.reason", reason),
+	))
 }
 
 func (p *InternalMetricsReporter) LargeBufferDroppedBytes(bytes uint64) {
