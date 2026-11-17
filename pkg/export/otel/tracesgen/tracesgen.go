@@ -274,7 +274,7 @@ func generateTracesWithAttributes(
 
 		// Create a parent span for the whole request session
 		s := ss.Spans().AppendEmpty()
-		s.SetName(span.TraceName())
+		s.SetName(attributes.SanitizeUTF8(span.TraceName()))
 		s.SetKind(ptrace.SpanKind(spanKind(span)))
 		s.SetStartTimestamp(pcommon.NewTimestampFromTime(start))
 
@@ -317,7 +317,7 @@ func generateTracesWithAttributes(
 			}
 		}
 		if statusMessage != "" {
-			s.Status().SetMessage(statusMessage)
+			s.Status().SetMessage(attributes.SanitizeUTF8(statusMessage))
 		}
 		if !hasSubSpans {
 			appendSpanLinks(s, span.Links)
@@ -439,22 +439,26 @@ func AttrsToMap(attrs []attribute.KeyValue) pcommon.Map {
 	return m
 }
 
+// addAttrsToMap is the point where every trace attribute becomes an OTLP value.
+// OTLP string fields must be valid UTF-8, and one invalid string makes the
+// whole export request fail, so strings are sanitized here.
 func addAttrsToMap(attrs []attribute.KeyValue, dst pcommon.Map) {
 	dst.EnsureCapacity(dst.Len() + len(attrs))
 	for _, attr := range attrs {
-		switch v := attr.Value.AsInterface().(type) {
-		case string:
-			dst.PutStr(string(attr.Key), v)
-		case int64:
-			dst.PutInt(string(attr.Key), v)
-		case float64:
-			dst.PutDouble(string(attr.Key), v)
-		case bool:
-			dst.PutBool(string(attr.Key), v)
-		case []string:
-			s := dst.PutEmptySlice(string(attr.Key))
-			for _, val := range v {
-				s.AppendEmpty().SetStr(val)
+		key := string(attr.Key)
+		switch attr.Value.Type() {
+		case attribute.STRING:
+			dst.PutStr(key, attributes.SanitizeUTF8(attr.Value.AsString()))
+		case attribute.INT64:
+			dst.PutInt(key, attr.Value.AsInt64())
+		case attribute.FLOAT64:
+			dst.PutDouble(key, attr.Value.AsFloat64())
+		case attribute.BOOL:
+			dst.PutBool(key, attr.Value.AsBool())
+		case attribute.STRINGSLICE:
+			s := dst.PutEmptySlice(key)
+			for _, val := range attr.Value.AsStringSlice() {
+				s.AppendEmpty().SetStr(attributes.SanitizeUTF8(val))
 			}
 		}
 	}
