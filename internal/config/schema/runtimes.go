@@ -16,11 +16,13 @@ type Runtime struct {
 	Filter  AttributeFilters `yaml:"filter,omitempty"`
 }
 
-// GoRuntime describes Go probe enablement and channel span links.
+// GoRuntime describes Go probe enablement, channel span links and offset inspection limits.
 type GoRuntime struct {
 	Enabled      bool             `yaml:"enabled"`
 	Filter       AttributeFilters `yaml:"filter,omitempty"`
 	ChannelLinks *bool            `yaml:"channel_links,omitempty"`
+	// MaxPclntabSize is the maximum uncompressed .gopclntab size in bytes; zero disables the limit.
+	MaxPclntabSize uint64 `yaml:"max_pclntab_size,omitempty"`
 }
 
 // JavaRuntime describes Java runtime capture and debug settings.

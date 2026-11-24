@@ -58,6 +58,7 @@ type InternalMetricsReporter struct {
 
 	queueCapacityRatio      instrument.Float64Gauge
 	queueLength             instrument.Int64Gauge
+	goInspectionSkipped     instrument.Int64Counter
 	largeBufferDroppedBytes instrument.Int64Counter
 	traceSpansDropped       instrument.Int64Counter
 
@@ -265,6 +266,12 @@ func newInternalMetricsReporter(
 	if err != nil {
 		return nil, err
 	}
+	goInspectionSkipped, err := meter.Int64Counter(
+		internalNames.GoInspectionSkipped.OTEL,
+		instrument.WithDescription("Go offset inspections skipped by process executable name and reason"))
+	if err != nil {
+		return nil, err
+	}
 	largeBufferDroppedBytes, err := meter.Int64Counter(
 		internalNames.LargeBufferDroppedBytes.OTEL,
 		instrument.WithDescription("Payload bytes discarded after a configured per-request large buffer cap is reached"),
@@ -302,6 +309,7 @@ func newInternalMetricsReporter(
 		bpfRingbufFailures:               bpfRingbufFailures,
 		queueCapacityRatio:               queueCapacityRatio,
 		queueLength:                      queueLength,
+		goInspectionSkipped:              goInspectionSkipped,
 		largeBufferDroppedBytes:          largeBufferDroppedBytes,
 		traceSpansDropped:                traceSpansDropped,
 		internalAttrs:                    internalAttrs,
@@ -494,6 +502,13 @@ func (p *InternalMetricsReporter) BPFRingbufWriteCounts(ringbuf string, writes, 
 	attrs := sanitizedAttributes(attribute.String(string(attr.BpfMapName), ringbuf))
 	p.bpfRingbufWrites.Add(p.ctx, int64(writes), attrs)
 	p.bpfRingbufFailures.Add(p.ctx, int64(failures), attrs)
+}
+
+func (p *InternalMetricsReporter) GoInspectionSkipped(processName, reason string) {
+	p.goInspectionSkipped.Add(p.ctx, 1, sanitizedAttributes(
+		attribute.String(string(attr.ProcessExecutableName), processName),
+		attribute.String(attr.VendorPrefix+".go.inspection.skip.reason", reason),
+	))
 }
 
 func (p *InternalMetricsReporter) LargeBufferDroppedBytes(bytes uint64) {

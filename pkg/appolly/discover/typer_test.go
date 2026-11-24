@@ -4,6 +4,9 @@
 package discover
 
 import (
+	"bytes"
+	"debug/elf"
+	"fmt"
 	"io"
 	"iter"
 	"log/slog"
@@ -11,6 +14,7 @@ import (
 	osexec "os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -24,6 +28,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/ebpf"
 	"go.opentelemetry.io/obi/pkg/export"
 	attr "go.opentelemetry.io/obi/pkg/export/attributes/names"
+	"go.opentelemetry.io/obi/pkg/export/imetrics"
 	"go.opentelemetry.io/obi/pkg/export/otel/otelcfg"
 	"go.opentelemetry.io/obi/pkg/export/otel/perapp"
 	"go.opentelemetry.io/obi/pkg/internal/ebpf/gotracer"
@@ -708,4 +713,94 @@ func classifyUntilExit(t *testing.T, ty *typer, cmd *osexec.Cmd) ebpf.Instrument
 	require.Len(t, deleted, 1)
 	require.Same(t, result.FileInfo, deleted[0].Obj.FileInfo)
 	return result
+}
+
+type inspectionSkipReporter struct {
+	imetrics.NoopReporter
+	reasons []string
+	names   []string
+}
+
+func (r *inspectionSkipReporter) GoInspectionSkipped(processName, reason string) {
+	r.names = append(r.names, processName)
+	r.reasons = append(r.reasons, reason)
+}
+
+func TestGoInspectionSizeLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		limit, size uint64
+		skip        bool
+	}{
+		{"disabled", 0, 101, false},
+		{"below", 100, 99, false},
+		{"at", 100, 100, false},
+		{"above", 100, 101, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			reporter := &inspectionSkipReporter{}
+			ty := typer{
+				cfg: &obi.Config{Discovery: services.DiscoveryConfig{GoMaxPclntabSize: services.ByteSize(tc.limit)}},
+				log: slog.New(slog.NewTextHandler(&logs, nil)), metrics: reporter,
+			}
+			// NOBITS has no data: permitted inspections return a section read error.
+			ef := &elf.File{Sections: []*elf.Section{{SectionHeader: elf.SectionHeader{Name: ".gopclntab", Type: elf.SHT_NOBITS, Size: tc.size}}}}
+			fi := exec.New(exec.Init{CmdExePath: "/test/large-go", ELF: ef})
+			offsets, err := ty.inspectOffsets(fi)
+			assert.Nil(t, offsets)
+			if tc.skip {
+				require.ErrorIs(t, err, errGoInspectionSizeLimit)
+				assert.Equal(t, []string{"pclntab_too_large"}, reporter.reasons)
+				assert.Equal(t, []string{"large-go"}, reporter.names)
+				assert.Equal(t, 1, strings.Count(logs.String(), "level=WARN"))
+				assert.Contains(t, logs.String(), "exe=/test/large-go")
+				assert.Contains(t, logs.String(), "pclntab_size=101")
+			} else {
+				require.Error(t, err)
+				assert.NotErrorIs(t, err, errGoInspectionSizeLimit)
+				assert.Empty(t, reporter.reasons)
+				assert.Empty(t, logs.String())
+			}
+		})
+	}
+}
+
+func TestGoInspectionSizeLimitCachedFallback(t *testing.T) {
+	orig := findProcLanguage
+	findProcLanguage = func(app.PID) (svc.InstrumentableType, error) { return svc.InstrumentableGolang, nil }
+	t.Cleanup(func() { findProcLanguage = orig })
+	cache, err := lru.New[cacheKey, goInspectionResult](100)
+	require.NoError(t, err)
+	var logs bytes.Buffer
+	reporter := &inspectionSkipReporter{}
+	ty := typer{
+		cfg: &obi.Config{Discovery: services.DiscoveryConfig{GoMaxPclntabSize: 100}},
+		log: slog.New(slog.NewTextHandler(&logs, nil)), metrics: reporter,
+		goOffsetsCache: cache, currentPids: map[app.PID]*exec.FileInfo{},
+	}
+	ef := &elf.File{Sections: []*elf.Section{{SectionHeader: elf.SectionHeader{Name: ".gopclntab", Size: 101}}}}
+	for _, pid := range []app.PID{10, 11} {
+		fi := exec.New(exec.Init{Pid: pid, Dev: 1, Ino: 2, CmdExePath: "/test/large-go", ELF: ef})
+		inst := ty.asInstrumentable(fi)
+		assert.Equal(t, svc.InstrumentableGolang, inst.Type)
+		assert.Nil(t, inst.Offsets)
+		assert.ErrorIs(t, inst.InstrumentationError, errGoInspectionSizeLimit)
+	}
+	assert.Equal(t, []string{"pclntab_too_large"}, reporter.reasons)
+	assert.Equal(t, []string{"large-go"}, reporter.names)
+	assert.Equal(t, 1, strings.Count(logs.String(), "level=WARN"))
+}
+
+func TestGoInspectionSkipMetricNamesAreBounded(t *testing.T) {
+	ty := typer{}
+	for i := range maxSkippedNames {
+		name := fmt.Sprintf("svc-%d", i)
+		assert.Equal(t, name, ty.skippedMetricName("/usr/bin/"+name))
+	}
+	// A name seen before keeps its own label, a new one shares "other".
+	assert.Equal(t, "svc-0", ty.skippedMetricName("/bin/svc-0"))
+	assert.Equal(t, "other", ty.skippedMetricName("/bin/one-more"))
+	assert.Equal(t, "other", ty.skippedMetricName("/bin/and-another"))
+	assert.Len(t, ty.skippedNames, maxSkippedNames)
 }

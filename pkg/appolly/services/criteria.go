@@ -111,6 +111,11 @@ type DiscoveryConfig struct {
 	// process inspections. 0 is treated as a default (5s) by the process watcher.
 	PollInterval time.Duration `yaml:"poll_interval" env:"OTEL_EBPF_DISCOVERY_POLL_INTERVAL" validate:"gte=0"`
 
+	// GoMaxPclntabSize limits Go offset inspection by uncompressed .gopclntab bytes.
+	// Zero disables the limit. The environment variable accepts bytes or a unit
+	// ("64MiB"). Config v2 exposes this under capture.runtimes.go, in bytes.
+	GoMaxPclntabSize ByteSize `yaml:"-" env:"OTEL_EBPF_GO_MAX_PCLNTAB_SIZE"`
+
 	// This can be enabled to use generic HTTP tracers only, no Go-specifics will be used:
 	SkipGoSpecificTracers bool `yaml:"skip_go_specific_tracers" env:"OTEL_EBPF_SKIP_GO_SPECIFIC_TRACERS"`
 

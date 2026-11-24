@@ -368,3 +368,20 @@ func readNMetricsByName(
 
 	return records
 }
+
+func TestInternalMetricsGoInspectionSkipped(t *testing.T) {
+	records := make(chan collector.MetricRecord, 16)
+	mcfg := &otelcfg.MetricsConfig{Interval: 10 * time.Millisecond, MetricsExport: testMetricsConsumer(records)}
+	ctxInfo := &global.ContextInfo{OTELMetricsExporter: &otelcfg.MetricsExporterInstancer{Cfg: mcfg}}
+	reporter, err := NewInternalMetricsReporter(t.Context(), ctxInfo, mcfg, &imetrics.InternalMetricsConfig{})
+	require.NoError(t, err)
+	reporter.GoInspectionSkipped("keda-admission-webhooks", "pclntab_too_large")
+	reporter.GoInspectionSkipped("keda-admission-webhooks", "pclntab_too_large")
+	metrics := readMetricsByName(t, records, time.Second, attr.VendorPrefix+".go.inspection.skipped")
+	require.Len(t, metrics, 1)
+	assert.Equal(t, int64(2), metrics[0].IntVal)
+	assert.Equal(t, map[string]string{
+		"process.executable.name":       "keda-admission-webhooks",
+		"obi.go.inspection.skip.reason": "pclntab_too_large",
+	}, metrics[0].Attributes)
+}

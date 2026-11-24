@@ -1322,3 +1322,17 @@ func TestMigratedV1PreservesNameResolverDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []transform.Source{transform.SourceK8s, transform.SourceECS}, migrated.NameResolver.Sources)
 }
+
+func TestGoInspectionLimitV2RoundTrip(t *testing.T) {
+	cfg := defaultRuntimeConfig()
+	cfg.Discovery.GoMaxPclntabSize = services.ByteSize(64 << 20)
+	_, ext := RuntimeToV2(&cfg)
+	require.Equal(t, uint64(64<<20), ext.Capture.Runtimes.Go.MaxPclntabSize)
+	got, err := V2ToRuntime(ext)
+	require.NoError(t, err)
+	require.Equal(t, cfg.Discovery.GoMaxPclntabSize, got.Discovery.GoMaxPclntabSize)
+	ext.Capture.Runtimes.Go.MaxPclntabSize = 0
+	got, err = V2ToRuntime(ext)
+	require.NoError(t, err)
+	require.Zero(t, got.Discovery.GoMaxPclntabSize)
+}

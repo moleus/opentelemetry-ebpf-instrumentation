@@ -286,8 +286,9 @@ func captureRuntimes(cfg *obi.Config) schema.CaptureRuntimes {
 
 	return schema.CaptureRuntimes{
 		Go: schema.GoRuntime{
-			Enabled:      !cfg.Discovery.SkipGoSpecificTracers,
-			ChannelLinks: &goChannelLinks,
+			Enabled:        !cfg.Discovery.SkipGoSpecificTracers,
+			ChannelLinks:   &goChannelLinks,
+			MaxPclntabSize: uint64(cfg.Discovery.GoMaxPclntabSize),
 		},
 		NodeJS: schema.Runtime{
 			Enabled: cfg.NodeJS.Enabled,

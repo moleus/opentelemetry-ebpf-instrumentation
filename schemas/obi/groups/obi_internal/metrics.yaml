@@ -326,6 +326,23 @@ metrics:
         requirement_level:
           conditionally_required: if the operation ended in an error
 
+  - name: obi.go.inspection.skipped
+    instrument: counter
+    unit: ""
+    stability: development
+    requirement_level: recommended
+    brief: Go offset inspections skipped, by process name and reason.
+    note: >
+      Counts uncached executable inspections, not processes or attach failures.
+      OBI reports at most 64 distinct process names; later names are reported as
+      "other".
+    attributes:
+      - ref: process.executable.name
+        requirement_level:
+          conditionally_required: if the executable name could be resolved
+      - ref: obi.go.inspection.skip.reason
+        requirement_level: required
+
   - name: obi.avoided.services
     instrument: gauge
     unit: ""

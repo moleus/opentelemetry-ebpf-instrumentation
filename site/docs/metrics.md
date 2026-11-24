@@ -1102,6 +1102,21 @@ Length of the groups of traces flushed from the eBPF tracer to the next pipeline
 
 No attributes.
 
+## `obi.go.inspection.skipped`
+
+Go offset inspections skipped, by process name and reason.
+
+OBI reports at most 64 distinct process names; later names are reported as "other".
+
+| Instrument | Unit | Stability |
+| --- | --- | --- |
+| counter | 1 | development |
+
+| Attribute | Type | Requirement level | Stability | Description | Examples |
+| --- | --- | --- | --- | --- | --- |
+| `obi.go.inspection.skip.reason` | enum | `required` | development | Reason Go offset inspection was skipped. | pclntab_too_large |
+| `process.executable.name` | string | `conditionally_required`: if the executable name could be resolved | development | The name of the process executable. On Linux based systems, this SHOULD be set to the base name of the target of `/proc/[pid]/exe`. On Windows, this SHOULD be set to the base name of `GetProcessImageFileNameW`. | otelcol |
+
 ## `obi.instrumentation.errors`
 
 Total number of instrumentation errors, by process name and error type.

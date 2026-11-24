@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"path/filepath"
 	"strings"
 
 	lru "github.com/hashicorp/golang-lru/v2"
@@ -32,6 +33,8 @@ import (
 	"go.opentelemetry.io/obi/pkg/pipe/swarm"
 	"go.opentelemetry.io/obi/pkg/pipe/swarm/swarms"
 )
+
+var errGoInspectionSizeLimit = errors.New("Go offset inspection skipped: .gopclntab exceeds size limit")
 
 // Swappable in tests so typer tests don't depend on /proc inspections.
 var findProcLanguage = procs.FindProcLanguage
@@ -94,6 +97,29 @@ type typer struct {
 	currentPids    map[app.PID]*exec.FileInfo
 	allGoFunctions []string
 	goOffsetsCache *lru.Cache[cacheKey, goInspectionResult]
+	// skippedNames holds the executable names already reported by the
+	// Go inspection skip metric. It keeps the metric labels bounded.
+	skippedNames map[string]struct{}
+}
+
+// maxSkippedNames is the number of distinct executable names the Go inspection
+// skip metric reports. Later names share the name "other".
+const maxSkippedNames = 64
+
+// skippedMetricName returns the executable name for the skip metric label.
+func (t *typer) skippedMetricName(exePath string) string {
+	name := filepath.Base(exePath)
+	if _, ok := t.skippedNames[name]; ok {
+		return name
+	}
+	if len(t.skippedNames) >= maxSkippedNames {
+		return "other"
+	}
+	if t.skippedNames == nil {
+		t.skippedNames = map[string]struct{}{}
+	}
+	t.skippedNames[name] = struct{}{}
+	return name
 }
 
 func samplerFromConfig(s *services.SamplerConfig) trace.Sampler {
@@ -284,7 +310,8 @@ func (t *typer) asInstrumentable(execElf *exec.FileInfo) ebpf.Instrumentable {
 	result, cached := t.goOffsetsCache.Get(key)
 	if !cached {
 		result.offsets, result.err = t.inspectOffsets(execElf)
-		if result.offsets != nil || errors.Is(result.err, goexec.ErrNoInstrumentationPoints) || errors.Is(result.err, goexec.ErrUnsupportedGoVersion) {
+		if result.offsets != nil || errors.Is(result.err, goexec.ErrNoInstrumentationPoints) || errors.Is(result.err, goexec.ErrUnsupportedGoVersion) ||
+			errors.Is(result.err, errGoInspectionSizeLimit) {
 			t.goOffsetsCache.Add(key, result)
 		}
 	}
@@ -351,6 +378,14 @@ func (t *typer) inspectOffsets(execElf *exec.FileInfo) (*goexec.Offsets, error) 
 	}
 	if execElf.ELF() == nil || execElf.ELF().Section(".gopclntab") == nil {
 		return nil, nil
+	}
+	if limit := t.cfg.Discovery.GoMaxPclntabSize; limit > 0 {
+		if section := execElf.ELF().Section(".gopclntab"); section != nil && section.Size > uint64(limit) {
+			t.log.Warn("Skipping Go offset inspection, using generic instrumentation",
+				"exe", execElf.CmdExePath(), "pclntab_size", section.Size, "limit", limit)
+			t.metrics.GoInspectionSkipped(t.skippedMetricName(execElf.CmdExePath()), "pclntab_too_large")
+			return nil, errGoInspectionSizeLimit
+		}
 	}
 	t.log.Debug("inspecting", "pid", execElf.Pid(), "comm", execElf.CmdExePath())
 	offsets, err := goexec.InspectOffsets(execElf, t.allGoFunctions)
