@@ -122,6 +122,24 @@ func (e *HTTPEnricher) Enrich(
 	return true
 }
 
+// EnrichRequest applies the request-scope rules to a span whose response was
+// not captured (the response buffer is missing or does not parse). It keeps
+// the request headers and body that were seen, so the span is not left
+// without the Host header or the request id. Returns true if any content was
+// extracted.
+func (e *HTTPEnricher) EnrichRequest(baseSpan *request.Span, req *http.Request) bool {
+	reqHeaders := e.processHeaders(requestHeadersWithHost(req), config.HTTPParsingScopeRequest, baseSpan)
+	reqBody := e.processBody(req.Header, readRequestBody(req), config.HTTPParsingScopeRequest, baseSpan)
+
+	if len(reqHeaders) > 0 {
+		baseSpan.RequestHeaders = reqHeaders
+	}
+	if reqBody != "" {
+		baseSpan.RequestBodyContent = reqBody
+	}
+	return len(reqHeaders) > 0 || reqBody != ""
+}
+
 // requestHeadersWithHost returns the request headers including Host. The
 // net/http parser moves the Host header into req.Host and removes it from
 // req.Header, so header rules could never match it. The caller's header map

@@ -1607,3 +1607,112 @@ func TestGenericParsingSpan_HostHeaderIgnoredOnResponseScope(t *testing.T) {
 	cfg.Rules[0].Scope = config.HTTPParsingScopeResponse
 	assert.False(t, NewHTTPEnricher(cfg).Enrich(span, req, resp))
 }
+
+func TestEnrichRequest_RequestScopeOnly(t *testing.T) {
+	cfg := config.EnrichmentConfig{
+		Enabled: true,
+		Policy: config.HTTPParsingPolicy{
+			DefaultAction: config.HTTPParsingDefaultAction{
+				Headers: config.HTTPParsingActionExclude,
+				Body:    config.HTTPParsingActionExclude,
+			},
+			DefaultObfuscationString: "*",
+		},
+		Rules: []config.HTTPParsingRule{
+			{
+				Action: config.HTTPParsingActionInclude,
+				Type:   config.HTTPParsingRuleTypeHeaders,
+				Scope:  config.HTTPParsingScopeAll,
+				Match:  config.HTTPParsingMatch{Patterns: []services.GlobAttr{gi("X-Request-Id"), gi("Host")}},
+			},
+		},
+	}
+	span := &request.Span{Method: "GET", Path: "/test"}
+	req, _ := makeReqResp(map[string]string{"X-Request-Id": "abc123", "Accept": "*/*"}, nil)
+	req.Host = "example.test"
+
+	require.True(t, NewHTTPEnricher(cfg).EnrichRequest(span, req))
+	assert.Equal(t, []string{"abc123"}, span.RequestHeaders["X-Request-Id"])
+	assert.Equal(t, []string{"example.test"}, span.RequestHeaders["Host"])
+	_, hasAccept := span.RequestHeaders["Accept"]
+	assert.False(t, hasAccept)
+	assert.Nil(t, span.ResponseHeaders)
+
+	empty := &request.Span{}
+	req2, _ := makeReqResp(map[string]string{"Accept": "*/*"}, nil)
+	assert.False(t, NewHTTPEnricher(cfg).EnrichRequest(empty, req2))
+	assert.Nil(t, empty.RequestHeaders)
+}
+
+func enrichRequestConfig(rules ...config.HTTPParsingRule) config.EnrichmentConfig {
+	return config.EnrichmentConfig{
+		Enabled: true,
+		Policy: config.HTTPParsingPolicy{
+			DefaultAction: config.HTTPParsingDefaultAction{
+				Headers: config.HTTPParsingActionExclude,
+				Body:    config.HTTPParsingActionExclude,
+			},
+			DefaultObfuscationString: "***",
+		},
+		Rules: rules,
+	}
+}
+
+// A rule of the response scope must not leak into a request-only span.
+func TestEnrichRequest_ResponseScopeRuleIsIgnored(t *testing.T) {
+	cfg := enrichRequestConfig(
+		config.HTTPParsingRule{
+			Action: config.HTTPParsingActionInclude,
+			Type:   config.HTTPParsingRuleTypeHeaders,
+			Scope:  config.HTTPParsingScopeResponse,
+			Match:  config.HTTPParsingMatch{Patterns: []services.GlobAttr{gi("X-Request-Id"), gi("Host")}},
+		},
+		config.HTTPParsingRule{
+			Action: config.HTTPParsingActionInclude,
+			Type:   config.HTTPParsingRuleTypeBody,
+			Scope:  config.HTTPParsingScopeResponse,
+		},
+	)
+	span := &request.Span{Method: "POST", Path: "/test"}
+	req, _ := makeReqRespWithBody(`{"a":1}`, "")
+	req.Header.Set("X-Request-Id", "abc123")
+	req.Host = "example.test"
+
+	assert.False(t, NewHTTPEnricher(cfg).EnrichRequest(span, req))
+	assert.Nil(t, span.RequestHeaders)
+	assert.Empty(t, span.RequestBodyContent)
+}
+
+// The request body is kept, or obfuscated, by the rules of the request scope.
+func TestEnrichRequest_RequestBody(t *testing.T) {
+	include := config.HTTPParsingRule{
+		Action: config.HTTPParsingActionInclude,
+		Type:   config.HTTPParsingRuleTypeBody,
+		Scope:  config.HTTPParsingScopeRequest,
+	}
+	obfuscate := config.HTTPParsingRule{
+		Action: config.HTTPParsingActionObfuscate,
+		Type:   config.HTTPParsingRuleTypeBody,
+		Scope:  config.HTTPParsingScopeAll,
+		Match:  config.HTTPParsingMatch{ObfuscationJSONPaths: []config.JSONPathExpr{jp("$.password")}},
+	}
+
+	t.Run("include", func(t *testing.T) {
+		span := &request.Span{Method: "POST", Path: "/test"}
+		req, _ := makeReqRespWithBody(`{"user":"u","password":"p"}`, "")
+		require.True(t, NewHTTPEnricher(enrichRequestConfig(include)).EnrichRequest(span, req))
+		assert.JSONEq(t, `{"user":"u","password":"p"}`, span.RequestBodyContent)
+	})
+	t.Run("obfuscate", func(t *testing.T) {
+		span := &request.Span{Method: "POST", Path: "/test"}
+		req, _ := makeReqRespWithBody(`{"user":"u","password":"p"}`, "")
+		require.True(t, NewHTTPEnricher(enrichRequestConfig(obfuscate)).EnrichRequest(span, req))
+		assert.JSONEq(t, `{"user":"u","password":"***"}`, span.RequestBodyContent)
+	})
+	t.Run("excluded by default", func(t *testing.T) {
+		span := &request.Span{Method: "POST", Path: "/test"}
+		req, _ := makeReqRespWithBody(`{"user":"u"}`, "")
+		assert.False(t, NewHTTPEnricher(enrichRequestConfig()).EnrichRequest(span, req))
+		assert.Empty(t, span.RequestBodyContent)
+	})
+}

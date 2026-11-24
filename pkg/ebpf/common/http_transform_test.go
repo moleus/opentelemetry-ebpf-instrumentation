@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/obi/pkg/appolly/app"
 	"go.opentelemetry.io/obi/pkg/appolly/app/request"
 	"go.opentelemetry.io/obi/pkg/appolly/app/svc"
+	"go.opentelemetry.io/obi/pkg/appolly/services"
 	"go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/ebpf/ringbuf"
 	"go.opentelemetry.io/obi/pkg/internal/largebuf"
@@ -988,4 +989,142 @@ func TestHttpSafeParseResponseNonChunked(t *testing.T) {
 	got, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Equal(t, body, string(got))
+}
+
+func enrichmentTestConfig() config.EBPFTracer {
+	return config.EBPFTracer{
+		PayloadExtraction: config.PayloadExtraction{
+			HTTP: config.HTTPConfig{
+				Enrichment: config.EnrichmentConfig{
+					Enabled: true,
+					Policy: config.HTTPParsingPolicy{
+						DefaultAction: config.HTTPParsingDefaultAction{
+							Headers: config.HTTPParsingActionExclude,
+							Body:    config.HTTPParsingActionExclude,
+						},
+						DefaultObfuscationString: "*",
+					},
+					Rules: []config.HTTPParsingRule{
+						{
+							Action: config.HTTPParsingActionInclude,
+							Type:   config.HTTPParsingRuleTypeHeaders,
+							Scope:  config.HTTPParsingScopeAll,
+							Match: config.HTTPParsingMatch{
+								Patterns: []services.GlobAttr{services.NewGlob("host"), services.NewGlob("x-request-id")},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// The response large buffer can be lost (ring buffer overflow, LRU eviction):
+// the span must keep the request headers selected by the enrichment rules.
+func TestHTTPInfoEventToSpan_EnrichesRequestWithoutResponse(t *testing.T) {
+	const reqHead = "POST /items/watch HTTP/1.1\r\nHost: svc.example.test\r\nX-Request-Id: r1\r\nUser-Agent: x\r\nContent-Length: 600\r\n\r\n{\"k\":"
+	const truncatedHead = "POST /items/watch HTTP/1.1\r\nHost: svc.example.test\r\nX-Req"
+	const badRequest = "POST /bad HTTP/1.1\r\nthis header line has no colon\r\n\r\n"
+	connInfo := BpfConnectionInfoT{D_port: 80}
+	traceID := [16]uint8{'t', 'r', 'a', 'c', 'e', 1}
+
+	tests := []struct {
+		name         string
+		head         string // the request bytes of the event
+		largeRequest bool   // the request large buffer is present, with head
+		largeResp    string
+		responseOnly bool // the rules apply to the response scope only
+		wantPath     string
+		wantHeaders  map[string][]string // nil: the span has no request headers
+	}{
+		{
+			name: "response buffer missing, request buffer present", head: reqHead, largeRequest: true,
+			wantPath:    "/items/watch",
+			wantHeaders: map[string][]string{"Host": {"svc.example.test"}, "X-Request-Id": {"r1"}},
+		},
+		{
+			name: "both buffers missing, primary buffer used", head: reqHead,
+			wantPath:    "/items/watch",
+			wantHeaders: map[string][]string{"Host": {"svc.example.test"}, "X-Request-Id": {"r1"}},
+		},
+		{
+			name: "response does not parse", head: reqHead, largeRequest: true, largeResp: "garbage\x00\x01",
+			wantPath:    "/items/watch",
+			wantHeaders: map[string][]string{"Host": {"svc.example.test"}, "X-Request-Id": {"r1"}},
+		},
+		{
+			// the parser needs the end of the headers: a request that is cut inside the
+			// headers keeps none (the span is the one of the request line parser)
+			name: "request headers cut off", head: truncatedHead, largeRequest: true,
+			wantPath: "/items/watch",
+		},
+		{
+			// no headers to keep: the span of the request line parser is returned as it was
+			name: "request does not parse", head: badRequest, largeRequest: true, largeResp: "garbage\x00\x01",
+			wantPath: "/bad",
+		},
+		{
+			name: "rules of the response scope do not touch the request", head: reqHead, largeRequest: true,
+			responseOnly: true, wantPath: "/items/watch",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := enrichmentTestConfig()
+			if tc.responseOnly {
+				cfg.PayloadExtraction.HTTP.Enrichment.Rules[0].Scope = config.HTTPParsingScopeResponse
+			}
+			pctx := NewEBPFParseContext(&cfg, nil, nil)
+			require.NotNil(t, pctx.httpEnricher)
+
+			var event BPFHTTPInfo
+			event.Type = uint8(request.EventTypeHTTP)
+			event.Status = 200
+			event.HasLargeBuffers = 1
+			event.ConnInfo = connInfo
+			event.Tp.TraceId = traceID
+			copy(event.Buf[:], tc.head)
+
+			add := func(packetType uint8, payload string) {
+				hdr := TCPLargeBufferHeader{PacketType: packetType, Len: uint32(len(payload)), Action: largeBufferActionInit, Kind: uint8(KindLayerApp)}
+				hdr.Tp.TraceId = traceID
+				hdr.ConnInfo = connInfo
+				_, _, err := appendTCPLargeBuffer(pctx, toRingbufRecord(t, hdr, payload))
+				require.NoError(t, err)
+			}
+			if tc.largeRequest {
+				add(packetTypeRequest, tc.head)
+			}
+			if tc.largeResp != "" {
+				add(packetTypeResponse, tc.largeResp)
+			}
+
+			span, ignored, err := HTTPInfoEventToSpan(pctx, &event)
+			require.NoError(t, err)
+			assert.False(t, ignored)
+			assert.Equal(t, tc.wantPath, span.Path)
+			assert.Equal(t, 200, span.Status)
+			if tc.wantHeaders == nil {
+				assert.Nil(t, span.RequestHeaders)
+				return
+			}
+			assert.Equal(t, tc.wantHeaders, map[string][]string(span.RequestHeaders))
+		})
+	}
+}
+
+// Without enrichment the request-only path must not parse or add headers.
+func TestHTTPInfoEventToSpan_NoEnrichmentNoHeaders(t *testing.T) {
+	var event BPFHTTPInfo
+	event.Type = uint8(request.EventTypeHTTP)
+	event.Status = 200
+	copy(event.Buf[:], "GET /a HTTP/1.1\r\nHost: h\r\n\r\n")
+
+	cfg := config.EBPFTracer{}
+	span, _, err := HTTPInfoEventToSpan(NewEBPFParseContext(&cfg, nil, nil), &event)
+	require.NoError(t, err)
+	assert.Nil(t, span.RequestHeaders)
+	assert.Equal(t, "/a", span.Path)
 }

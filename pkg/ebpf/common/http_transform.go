@@ -421,8 +421,9 @@ func HTTPInfoEventToSpan(parseCtx *EBPFParseContext, event *BPFHTTPInfo) (reques
 	}
 
 	if !hasResponse {
-		// Large buffers disabled
-		return httpRequestToSpan(event, requestBuffer), false, nil
+		// Large buffers disabled, or the response buffer was lost (ring buffer
+		// overflow, eviction). The request headers are still in the request buffer.
+		return httpRequestOnlyToSpan(parseCtx, event, requestBuffer, nil), false, nil
 	}
 
 	// http.ReadRequest requires a *bufio.Reader; that one allocation is unavoidable.
@@ -431,7 +432,11 @@ func HTTPInfoEventToSpan(parseCtx *EBPFParseContext, event *BPFHTTPInfo) (reques
 	resp, err2 := httpSafeParseResponse(responseBuffer, req)
 	if err != nil || err2 != nil {
 		slog.Debug("error while parsing http request or response, falling back to manual HTTP info parsing", "reqErr", err, "respErr", err2)
-		return httpRequestToSpan(event, requestBuffer), false, nil
+		if err != nil {
+			// the request does not parse: there are no headers to keep
+			return httpRequestToSpan(event, requestBuffer), false, nil
+		}
+		return httpRequestOnlyToSpan(parseCtx, event, requestBuffer, req), false, nil
 	}
 
 	// When the body is empty but Content-Length indicates data should be
@@ -447,6 +452,30 @@ func HTTPInfoEventToSpan(parseCtx *EBPFParseContext, event *BPFHTTPInfo) (reques
 	}
 
 	return httpRequestResponseToSpan(parseCtx, event, req, resp), false, nil
+}
+
+// httpRequestOnlyToSpan builds the span from the request side only (the response
+// is missing or does not parse) and applies the request-scope enrichment rules,
+// so that the span keeps the request headers. req is the already parsed request;
+// when nil, the request is parsed from requestBuffer.
+func httpRequestOnlyToSpan(parseCtx *EBPFParseContext, event *BPFHTTPInfo, requestBuffer *largebuf.LargeBuffer, req *http.Request) request.Span {
+	span := httpRequestToSpan(event, requestBuffer)
+
+	if parseCtx == nil || parseCtx.httpEnricher == nil {
+		return span
+	}
+
+	if req == nil {
+		reqReader := requestBuffer.NewReader()
+		parsed, err := http.ReadRequest(bufio.NewReader(&reqReader))
+		if err != nil {
+			return span
+		}
+		req = parsed
+	}
+	parseCtx.httpEnricher.EnrichRequest(&span, req)
+
+	return span
 }
 
 // largeBufferHasRequestHead reports whether the large buffer starts with the request
