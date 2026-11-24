@@ -13,6 +13,7 @@
 #include <common/connection_info.h>
 #include <common/large_buffers.h>
 #include <common/ringbuf.h>
+#include <generictracer/kafka_produce.h>
 #include <generictracer/protocol_common.h>
 #include <generictracer/maps/protocol_cache.h>
 
@@ -81,6 +82,7 @@ enum {
     k_kafka_min_response_message_size_value = 4, // correlation_id (4)
 
     // https://kafka.apache.org/protocol#protocol_api_keys
+    // k_kafka_api_key_produce is in kafka_produce.h
     k_kafka_api_key_metadata = 3,
     // only versions 10-13 contain topic_id which we are interested in
     k_kafka_min_metadata_api_version = 10,

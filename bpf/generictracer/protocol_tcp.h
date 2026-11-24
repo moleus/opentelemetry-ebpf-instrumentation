@@ -258,6 +258,26 @@ static __always_inline bool is_unix_sock_server(u8 direction, u16 orig_dport) {
     return (direction == TCP_RECV && orig_dport == 0);
 }
 
+// A Kafka Produce request with acks=0 gets no response, so the request/response pairing of
+// the generic tracker never completes for it. When the pending request is exactly one complete
+// Produce request with acks=0, no response will come: send it now and forget it. There is no
+// response to time, so the span has zero length. A Produce request with acks != 0 (or an
+// unreadable one) is never sent here: its response closes it.
+static __always_inline bool send_if_kafka_produce_without_response(tcp_req_t *req,
+                                                                   pid_connection_info_t *pid_conn) {
+    if (req->end_monotime_ns != 0 ||
+        !kafka_is_complete_acks0_produce(req->buf, req->len, req->req_len)) {
+        return false;
+    }
+    bpf_dbg_printk("Kafka produce without response, sending the request");
+    req->end_monotime_ns = req->start_monotime_ns;
+    req->resp_len = 0;
+    bpf_ringbuf_output(&events, req, sizeof(*req), get_flags());
+    cleanup_trace_info(req, pid_conn);
+    bpf_map_delete_elem(&ongoing_tcp_req, pid_conn);
+    return true;
+}
+
 static __always_inline void handle_unknown_tcp_connection(pid_connection_info_t *pid_conn,
                                                           void *u_buf,
                                                           int bytes_len,
@@ -365,7 +385,9 @@ static __always_inline void handle_unknown_tcp_connection(pid_connection_info_t 
                                   protocol_type,
                                   k_large_buf_action_init);
 
-            bpf_map_update_elem(&ongoing_tcp_req, pid_conn, req, BPF_ANY);
+            if (!send_if_kafka_produce_without_response(req, pid_conn)) {
+                bpf_map_update_elem(&ongoing_tcp_req, pid_conn, req, BPF_ANY);
+            }
         }
     } else if (existing->direction != direction) {
         const enum large_buf_action response_action =
@@ -416,7 +438,8 @@ static __always_inline void handle_unknown_tcp_connection(pid_connection_info_t 
             bpf_probe_read(existing->buf + off, (k_tcp_max_len / 2), u_buf);
         }
         existing->len += bytes_len;
-        existing->req_len = existing->len;
+        // the bytes read for the request, not the bytes captured
+        existing->req_len += bytes_len;
 
         tcp_send_large_buffer(existing,
                               pid_conn,
@@ -425,6 +448,7 @@ static __always_inline void handle_unknown_tcp_connection(pid_connection_info_t 
                               direction,
                               protocol_type,
                               k_large_buf_action_append);
+        send_if_kafka_produce_without_response(existing, pid_conn);
     }
 }
 
