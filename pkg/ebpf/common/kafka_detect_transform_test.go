@@ -1306,3 +1306,15 @@ func TestKafkaConsumerGroupsTopicBudget(t *testing.T) {
 	assert.Equal(t, maxTopicsPerProcess-maxTopicsPerMember+24+10, kept())
 	assert.Equal(t, "group", groups.Lookup(proc, "commit-9"))
 }
+
+func TestKafkaSpanUnresolvedEndpointOmitsPhantomPorts(t *testing.T) {
+	for _, port := range []uint16{0, 52428, 5672, 9092} {
+		span := TCPToKafkaToSpan(&TCPRequestInfo{
+			ConnInfo: BpfConnectionInfoT{S_port: 42000, D_port: port},
+		}, &KafkaInfo{Operation: Fetch, Topic: "orders"})
+		assert.Empty(t, span.Host)
+		assert.Empty(t, span.Peer)
+		assert.Zero(t, span.HostPort)
+		assert.Zero(t, span.PeerPort)
+	}
+}
