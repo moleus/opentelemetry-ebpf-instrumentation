@@ -20,6 +20,9 @@ const (
 	kafkaGoAPIProduce
 )
 
+// saramaTopicNameMax is k_kafka_produce_topic_name_max in bpf/common/kafka_produce_topics.h.
+const saramaTopicNameMax = 128
+
 func ReadGoSaramaRequestIntoSpan(parseCtx *EBPFParseContext, record *ringbuf.Record) (request.Span, bool, error) {
 	event, err := ReinterpretCast[GoSaramaClientInfo](record.RawSample)
 	if err != nil {
@@ -27,15 +30,71 @@ func ReadGoSaramaRequestIntoSpan(parseCtx *EBPFParseContext, record *ringbuf.Rec
 	}
 
 	proc := KafkaProcess{Ns: event.Pid.Ns, Pid: event.Pid.UserPid}
-	infos, ignore, err := ProcessKafkaEvent(largebuf.NewLargeBufferFrom(event.Buf[:]), nil, nil, parseCtx.kafkaConsumerGroups, proc, event.Conn)
-
-	// The Go Sarama uprobe captures one operation at a time, so a single topic is
-	// expected; use the first parsed topic.
-	if err == nil && !ignore && len(infos) > 0 {
-		return GoKafkaSaramaToSpan(event, infos[0]), false, nil
+	var groups *KafkaConsumerGroups
+	if parseCtx != nil {
+		groups = parseCtx.kafkaConsumerGroups
+	}
+	infos, ignore, err := ProcessKafkaEvent(largebuf.NewLargeBufferFrom(event.Buf[:]), nil, nil, groups, proc, event.Conn)
+	if err != nil || ignore || len(infos) == 0 {
+		return request.Span{}, true, nil // ignore if we couldn't parse it
 	}
 
-	return request.Span{}, true, nil // ignore if we couldn't parse it
+	infos = saramaTopicInfos(event, infos)
+	span := GoKafkaSaramaToSpan(event, infos[0])
+	if len(infos) > 1 {
+		extra := make([]request.Span, 0, len(infos)-1)
+		for _, info := range infos[1:] {
+			extra = append(extra, GoKafkaSaramaToSpan(event, info))
+		}
+		detachExtraSpans(extra)
+		parseCtx.emitExtraSpans(extra...)
+	}
+	return span, false, nil
+}
+
+// saramaTopicInfos returns one KafkaInfo per topic of the request. The event buffer holds
+// only a prefix of the request, which is enough for the header and the first topic. For a
+// Produce request the eBPF program also reads the topic names from the full request (see
+// bpf/common/kafka_produce_topics.h): at most k_kafka_produce_max_topics names, each cut at
+// k_kafka_produce_topic_name_max bytes. Without these names (other requests, or a Produce
+// version that the eBPF program does not read) only the first topic is reported.
+func saramaTopicInfos(event *GoSaramaClientInfo, infos []*KafkaInfo) []*KafkaInfo {
+	first := infos[0]
+	topics := &event.Topics
+	count := int(topics.Count)
+	if first.Operation != Produce || count == 0 {
+		return infos[:1]
+	}
+	count = min(count, len(topics.NameLen))
+
+	out := make([]*KafkaInfo, 0, count)
+	off := 0
+	for i := range count {
+		n := min(int(topics.NameLen[i]), saramaTopicNameMax)
+		if off+n > len(topics.Names) {
+			break
+		}
+		name := string(topics.Names[off : off+n])
+		off += n
+		// the prefix parse has the complete name when the copy was cut
+		if i == 0 && int(topics.NameLen[i]) > n && len(first.Topic) == int(topics.NameLen[i]) {
+			name = first.Topic
+		}
+		var partition *PartitionInfo
+		if p := topics.Partition[i]; p >= 0 {
+			partition = &PartitionInfo{Partition: int(p)}
+		}
+		out = append(out, &KafkaInfo{
+			Operation:     Produce,
+			Topic:         name,
+			ClientID:      first.ClientID,
+			PartitionInfo: partition,
+		})
+	}
+	if len(out) == 0 {
+		return infos[:1]
+	}
+	return out
 }
 
 func GoKafkaSaramaToSpan(event *GoSaramaClientInfo, data *KafkaInfo) request.Span {
