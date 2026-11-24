@@ -142,6 +142,28 @@ func detectSQLPayload(useHeuristics bool, b *largebuf.LargeBuffer) (string, []st
 	return op, tables, sql, sqlKind
 }
 
+// sqlKeywordBoundary reports whether the byte after a keyword ends the token.
+// A keyword that continues as a name or a path ("insert-hot", "alter-models",
+// "/insert/0") is not a SQL command; "/*" starts a comment and is accepted.
+// The bytes before the keyword are not checked: binary protocols put length and
+// flag bytes of any value in front of the statement.
+func sqlKeywordBoundary(buf []byte, index, keywordLen int) bool {
+	end := index + keywordLen
+	if end >= len(buf) {
+		return true
+	}
+	c := buf[end]
+	switch {
+	case c == '/':
+		return end+1 < len(buf) && buf[end+1] == '*'
+	case c == '-' || c == '_' || c == '.':
+		return false
+	case c >= '0' && c <= '9', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		return false
+	}
+	return true
+}
+
 func detectSQL(buf []byte) (string, []string, string) {
 	// Cheap prefilter: most SQL wire protocols carry a small binary header
 	// followed by the statement as plain text. If no printable-ASCII run long
@@ -154,12 +176,19 @@ func detectSQL(buf []byte) (string, []string, string) {
 
 	minIdx := -1
 	for _, q := range sqlKeywords {
-		i := asciiIndexFold(scan, q)
-		if i >= 0 && (minIdx < 0 || i < minIdx) {
-			minIdx = i
-			if minIdx == 0 {
+		for startIdx := 0; startIdx+len(q) <= len(scan); {
+			found := asciiIndexFold(scan[startIdx:], q)
+			if found < 0 {
 				break
 			}
+			i := startIdx + found
+			if sqlKeywordBoundary(scan, i, len(q)) {
+				if minIdx < 0 || i < minIdx {
+					minIdx = i
+				}
+				break
+			}
+			startIdx = i + 1
 		}
 	}
 
