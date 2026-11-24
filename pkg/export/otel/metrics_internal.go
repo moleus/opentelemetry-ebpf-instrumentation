@@ -61,6 +61,7 @@ type InternalMetricsReporter struct {
 	goInspectionSkipped     instrument.Int64Counter
 	largeBufferDroppedBytes instrument.Int64Counter
 	traceSpansDropped       instrument.Int64Counter
+	kubePodEventsDropped    instrument.Int64Counter
 
 	internalAttrs attr.InternalAttributes
 }
@@ -286,6 +287,13 @@ func newInternalMetricsReporter(
 	if err != nil {
 		return nil, err
 	}
+	kubePodEventsDropped, err := meter.Int64Counter(
+		internalNames.KubePodEventsDropped.OTEL,
+		instrument.WithDescription("Kubernetes Pod metadata events dropped because a bounded queue was full"),
+		instrument.WithUnit(internalNames.KubePodEventsDropped.Unit))
+	if err != nil {
+		return nil, err
+	}
 	return &InternalMetricsReporter{
 		ctx:                              ctx,
 		tracerFlushes:                    tracerFlushes,
@@ -312,6 +320,7 @@ func newInternalMetricsReporter(
 		goInspectionSkipped:              goInspectionSkipped,
 		largeBufferDroppedBytes:          largeBufferDroppedBytes,
 		traceSpansDropped:                traceSpansDropped,
+		kubePodEventsDropped:             kubePodEventsDropped,
 		internalAttrs:                    internalAttrs,
 	}, nil
 }
@@ -521,6 +530,10 @@ func (p *InternalMetricsReporter) QueueLength(subscriber string, length int) {
 
 func (p *InternalMetricsReporter) OTELTraceSpansDropped(spans int) {
 	p.traceSpansDropped.Add(p.ctx, int64(spans))
+}
+
+func (p *InternalMetricsReporter) KubePodEventsDropped(queue string) {
+	p.kubePodEventsDropped.Add(p.ctx, 1, sanitizedAttributes(attribute.String("queue", queue)))
 }
 
 func (p *InternalMetricsReporter) QueueBufferUtilization(subscriber string, ratio float64) {

@@ -103,6 +103,7 @@ func NewWithProtocolMetricSelection(ctx context.Context, ctxInfo *global.Context
 		&metadata.MetadataProvider{
 			K8sInformer:   ctxInfo.K8sInformer,
 			CloudMetadata: config.CloudMetadata,
+			Metrics:       ctxInfo.Metrics,
 		},
 		&config.Attributes.Kubernetes,
 		processEventsHostDecorated,

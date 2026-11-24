@@ -14,10 +14,12 @@ import (
 // elements without getting blocked.
 // TODO: can we replace this by channel-based msg.Queue?
 type Queue[T any] struct {
-	head  *node[T]
-	tail  *node[T]
-	mutex sync.Mutex
-	cond  *sync.Cond
+	head   *node[T]
+	tail   *node[T]
+	limit  int
+	length int
+	mutex  sync.Mutex
+	cond   *sync.Cond
 }
 
 type node[T any] struct {
@@ -31,13 +33,39 @@ func NewQueue[T any]() *Queue[T] {
 	return q
 }
 
-// Enqueue adds an element to the queue. This operation never blocks, this means that
-// if there isn't any goroutine dequeuing the elements, the queue will grow indefinitely.
+// NewBoundedQueue creates a FIFO queue that rejects new items when capacity is reached.
+func NewBoundedQueue[T any](capacity int) *Queue[T] {
+	if capacity <= 0 {
+		panic("queue capacity must be positive")
+	}
+	q := &Queue[T]{limit: capacity}
+	q.cond = sync.NewCond(&q.mutex)
+	return q
+}
+
+// Enqueue adds an element unless a bounded queue has reached its capacity. This operation never blocks.
 func (q *Queue[T]) Enqueue(item T) {
+	q.TryEnqueue(item)
+}
+
+// TryEnqueue adds an element unless the queue has reached its configured capacity.
+// It returns false when a bounded queue is full.
+func (q *Queue[T]) TryEnqueue(item T) bool {
 	q.mutex.Lock()
+	defer q.mutex.Unlock()
+	if q.limit > 0 && q.length >= q.limit {
+		return false
+	}
 	q.append(item)
 	q.cond.Signal() // Wake up one waiting goroutine
-	q.mutex.Unlock()
+	return true
+}
+
+// Len returns the number of items currently queued.
+func (q *Queue[T]) Len() int {
+	q.mutex.Lock()
+	defer q.mutex.Unlock()
+	return q.length
 }
 
 // Dequeue retrieves the firs element in the queue. If the queue is empty, Dequeue will
@@ -99,6 +127,7 @@ func (q *Queue[T]) append(item T) {
 		q.tail.prev = &n
 		q.tail = &n
 	}
+	q.length++
 }
 
 func (q *Queue[T]) remove() T {
@@ -107,5 +136,6 @@ func (q *Queue[T]) remove() T {
 	if q.head == nil {
 		q.tail = nil
 	}
+	q.length--
 	return v.value
 }
