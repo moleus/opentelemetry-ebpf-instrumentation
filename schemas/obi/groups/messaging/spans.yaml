@@ -63,6 +63,9 @@ spans:
         requirement_level: required
       - ref: messaging.client.id
         requirement_level: recommended
+      - ref: client.address
+        requirement_level:
+          recommended: on a span that the broker records; the address of the Kafka client
       - ref: messaging.destination.partition.id
         requirement_level:
           conditionally_required: if the record carried partition metadata
@@ -93,6 +96,9 @@ spans:
         requirement_level: required
       - ref: messaging.client.id
         requirement_level: recommended
+      - ref: client.address
+        requirement_level:
+          recommended: on a span that the broker records; the address of the Kafka client
       - ref: messaging.destination.partition.id
         requirement_level:
           conditionally_required: if the record carried partition metadata

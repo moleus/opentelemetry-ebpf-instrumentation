@@ -313,7 +313,7 @@ func emittedSpanCases() []emittedSpanCase {
 			// Kafka reports the offset only on a process operation, so the
 			// producer group must not declare it.
 			name:     "kafka producer",
-			absent:   []string{"service.peer.name"},
+			absent:   []string{"service.peer.name", "client.address"},
 			spanType: "obi.messaging.kafka.producer",
 			span: &request.Span{
 				Type:          request.EventTypeKafkaClient,
@@ -482,7 +482,7 @@ func emittedSpanCases() []emittedSpanCase {
 		},
 		{
 			name:     "kafka consumer",
-			absent:   []string{"service.peer.name"},
+			absent:   []string{"service.peer.name", "client.address"},
 			spanType: "obi.messaging.kafka.consumer",
 			span: &request.Span{
 				Type:          request.EventTypeKafkaClient,
