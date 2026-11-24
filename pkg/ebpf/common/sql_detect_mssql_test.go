@@ -35,6 +35,16 @@ func TestIsMSSQL(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "valid client reset without changing transaction",
+			buf:  []byte{0x01, 0x10, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00},
+			want: true,
+		},
+		{
+			name: "invalid reset flag on server response",
+			buf:  []byte{0x04, 0x10, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00},
+			want: false,
+		},
+		{
 			name: "too short",
 			buf:  []byte{0x01, 0x01, 0x00, 0x07, 0x00, 0x00, 0x00},
 			want: false,
@@ -46,7 +56,7 @@ func TestIsMSSQL(t *testing.T) {
 		},
 		{
 			name: "invalid status",
-			buf:  []byte{0x01, 0x10, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00},
+			buf:  []byte{0x01, 0x20, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00},
 			want: false,
 		},
 		{
@@ -70,6 +80,23 @@ func TestIsMSSQL(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, isMSSQL(largebuf.NewLargeBufferFrom(tt.buf)))
 		})
+	}
+}
+
+// The first byte of a CQL v4 request (0x04) equals the TDS RESPONSE type.
+// A CQL stream ID matching its captured frame length fooled the original BPF
+// classifier because both headers use byte 0x04 and big-endian bytes 2-3.
+func TestIsMSSQLRejectsCQL(t *testing.T) {
+	for _, flags := range []byte{0, 1} {
+		q := "INSERT INTO billing.orders_v2 (id) VALUES (1)"
+		bodyLen := 4 + len(q) + 3
+		packet := make([]byte, 9+bodyLen)
+		packet[0], packet[1], packet[4] = 0x04, flags, 0x07
+		binary.BigEndian.PutUint16(packet[2:], uint16(len(packet)))
+		binary.BigEndian.PutUint32(packet[5:], uint32(bodyLen))
+		binary.BigEndian.PutUint32(packet[9:], uint32(len(q)))
+		copy(packet[13:], q)
+		assert.False(t, isMSSQL(largebuf.NewLargeBufferFrom(packet)))
 	}
 }
 
