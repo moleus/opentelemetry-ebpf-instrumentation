@@ -160,13 +160,28 @@ static __always_inline u8 is_postgres(connection_info_t *conn_info,
         message_size += full_message_size;
 
         switch (hdr.message_type) {
-        case k_pg_msg_query:
+        case k_pg_msg_query: {
+            // Simple Query includes a zero-terminated query string. This check
+            // rejects MySQL COM_STMT_PREPARE frames that mimic a PG Q header.
+            u8 terminator = 1;
+            if (hdr.message_len < 5 ||
+                bpf_probe_read(&terminator, sizeof(terminator), data + message_size - 1) != 0 ||
+                terminator != 0) {
+                malformed = true;
+                break;
+            }
+            includes_known_command = true;
+            break;
+        }
         case k_pg_msg_parse:
         case k_pg_msg_bind:
         case k_pg_msg_execute:
             includes_known_command = true;
             break;
         default:
+            break;
+        }
+        if (malformed) {
             break;
         }
     }
