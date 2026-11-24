@@ -63,7 +63,15 @@ func canDuplicateProcessFDs() bool {
 }
 
 // otherwise every client socket is enrolled, as the ones opened before discovery can't be backfilled
+func pidfdGetfdOptedIn() bool {
+	return os.Getenv("OTEL_EBPF_TPINJECTOR_PIDFD_GETFD") == "true"
+}
+
 func (p *Tracer) canBackfillSockets() bool {
+	if !pidfdGetfdOptedIn() {
+		return false
+	}
+
 	if !canDuplicateProcessFDs() {
 		p.log.Warn("cannot duplicate the sockets of other processes (missing CAP_SYS_PTRACE?): " +
 			"context propagation enrolls the TCP client sockets of every process on the host")
