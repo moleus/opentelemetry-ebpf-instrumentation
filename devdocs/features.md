@@ -103,7 +103,7 @@ To turn this off and fallback to the normal network based instrumentation for Go
 | github.com/lib/pq              | PostgreSQL |                   All | All     |  Yes   |                 No |         N/A
 | github.com/redis/go-redis/v9   |   Redis    |             >= v9.0.0 | All     |  Yes   |                 No |         N/A
 | github.com/segmentio/kafka-go  |   Kafka    |            >= v0.4.11 | All     |  Yes   |                 No | `messaging.consumer.group.name` not reported (group requests are not captured by the Go uprobes)
-| github.com/IBM/sarama          |   Kafka    |               >= 1.37 | All     |  Yes   |                 No | `messaging.consumer.group.name` not reported (group requests are not captured by the Go uprobes)
+| github.com/IBM/sarama          |   Kafka    |               >= 1.37 | All     |  Yes   |                 No | `messaging.consumer.group.name` not reported (group requests are not captured by the Go uprobes). A Produce request gives one span per topic, for the first 8 topics of the request (fewer when the topics before them carry more than 250 partitions in total); a topic name longer than 128 bytes is cut to 128 bytes. Produce versions 9 and later (flexible versions, which Sarama does not send) and Fetch requests give one span, for the first topic
 | go.mongodb.org/mongo-driver    |  MongoDB   | >= v1.10.1, >= v2.0.1 | All     |  Yes   |                 No |         N/A
 
 ### Go Trace API Embedded Auto SDK
