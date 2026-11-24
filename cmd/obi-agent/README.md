@@ -47,8 +47,9 @@ limits:
 - The ratio uses the OpenTelemetry `TraceIDRatioBased` algorithm on the trace ID. All spans of one trace,
   on all nodes, get the same decision when they have the same ratio.
 - A rule that exports more than the default (a higher ratio, or `errors` that the default does not
-  export) must have `until`, at most `max_rule_duration` from the time the file is read. After `until`,
-  the rule is ignored. A large flow cannot stay on by mistake.
+  export) must have either `until` or a positive `spans_per_second` limit on that rule.
+  For rules that export more, `until` must not be more than `max_rule_duration` from the time the file is read.
+- Ratios and rate limits must be finite. NaN and infinity are rejected. A second YAML document is rejected.
 - An empty or missing file exports nothing.
 - An invalid file is rejected as a whole; the rules in use stay. See `/rules` and
   `obi_agent_rules_file_valid`.
@@ -90,3 +91,9 @@ obi-agent uses two options of the OBI library that other embedders can use too:
   exporters. A refused span is still counted by the span metrics.
 - `discover.RegisterTracers(factory)`: additional eBPF tracers, loaded with the OBI common tracers. Their
   spans go through the same pipeline (Kubernetes decoration, filters, exporters).
+
+## Network access
+
+The agent binds `:9466` by default. `/healthz`, `/metrics`, and `/rules` have no built-in
+HTTP authentication. `OBI_AGENT_PPROF` enables debug endpoints. With host networking, verify
+node-level firewall and security-group policy before enabling this listener.

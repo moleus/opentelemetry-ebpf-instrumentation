@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -113,6 +114,15 @@ func Parse(data []byte, now time.Time) (*Set, error) {
 	if err := dec.Decode(&f); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parsing rules: %w", err)
 	}
+	// Reject a second YAML document instead of silently ignoring its rules.
+	var extra yaml.Node
+	if err := dec.Decode(&extra); err != nil {
+		if !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("parsing trailing rules: %w", err)
+		}
+	} else {
+		return nil, errors.New("parsing rules: multiple YAML documents are not allowed")
+	}
 	return Compile(&f, now)
 }
 
@@ -126,8 +136,8 @@ func Compile(f *File, now time.Time) (*Set, error) {
 	if maxDuration == 0 {
 		maxDuration = DefaultMaxRuleDuration
 	}
-	if f.Limits.SpansPerSecond < 0 || f.Limits.Burst < 0 || maxDuration < 0 {
-		errs = append(errs, errors.New("limits: values must not be negative"))
+	if !finiteNonNegative(f.Limits.SpansPerSecond) || !finiteNonNegative(f.Limits.Burst) || maxDuration < 0 {
+		errs = append(errs, errors.New("limits: rate and burst must be finite and non-negative; duration must not be negative"))
 	}
 	set := &Set{Default: f.Default, Limits: f.Limits}
 	set.Limits.MaxRuleDuration = maxDuration
@@ -145,8 +155,8 @@ func Compile(f *File, now time.Time) (*Set, error) {
 		}
 		exportsMore := r.Ratio > f.Default.Ratio || (r.Errors && !f.Default.Errors)
 		switch {
-		case r.SpansPerSecond < 0:
-			errs = append(errs, fmt.Errorf("%s: spans_per_second must not be negative", id))
+		case !finiteNonNegative(r.SpansPerSecond):
+			errs = append(errs, fmt.Errorf("%s: spans_per_second must be finite and non-negative", id))
 		case exportsMore && r.Until == nil && r.SpansPerSecond == 0:
 			errs = append(errs, fmt.Errorf("%s: exports more than the default, so it needs 'until' or 'spans_per_second'", id))
 		case exportsMore && r.Until != nil && r.Until.Sub(now) > maxDuration:
@@ -178,10 +188,14 @@ func Compile(f *File, now time.Time) (*Set, error) {
 }
 
 func checkRatio(r float64) error {
-	if r < 0 || r > 1 {
-		return fmt.Errorf("ratio %v is not in 0..1", r)
+	if math.IsNaN(r) || math.IsInf(r, 0) || r < 0 || r > 1 {
+		return fmt.Errorf("ratio %v is not finite and in 0..1", r)
 	}
 	return nil
+}
+
+func finiteNonNegative(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0
 }
 
 func compile(pattern string) (glob.Glob, error) {
