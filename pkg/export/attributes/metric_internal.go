@@ -33,6 +33,9 @@ type InternalMetrics struct {
 	BpfRingbufWrites         Name
 	BpfRingbufWriteFailures  Name
 	QueueCapacityRatio       Name
+	QueueLength              Name
+	LargeBufferDroppedBytes  Name
+	TraceSpansDropped        Name
 }
 
 func NewInternalMetrics(prefix string) InternalMetrics {
@@ -116,6 +119,21 @@ func NewInternalMetrics(prefix string) InternalMetrics {
 			OTEL: prefix + ".queue.capacity.ratio",
 			Unit: "1",
 			Type: InstrumentGauge,
+		}),
+		QueueLength: metric(Name{
+			OTEL: prefix + ".queue.length",
+			Unit: "{message}",
+			Type: InstrumentGauge,
+		}),
+		LargeBufferDroppedBytes: metric(Name{
+			OTEL: prefix + ".large_buffer.dropped.bytes",
+			Unit: "By",
+			Type: InstrumentCounter,
+		}),
+		TraceSpansDropped: metric(Name{
+			OTEL: prefix + ".otel.trace.spans.dropped",
+			Unit: "1",
+			Type: InstrumentCounter,
 		}),
 	}
 }

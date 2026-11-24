@@ -89,6 +89,32 @@ func TestPrometheusReporterBPFRingbufWriteCounts(t *testing.T) {
 	assert.InDelta(t, 1, gpuFailures.GetCounter().GetValue(), 0)
 }
 
+func TestPrometheusReporterMemoryAndQueueMetrics(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	reporter := NewPrometheusReporter(&InternalMetricsConfig{}, nil, registry)
+	reporter.LargeBufferDroppedBytes(12)
+	reporter.QueueLength("traces", 3)
+	reporter.OTELTraceSpansDropped(2)
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	values := make(map[string]float64, len(families))
+	for _, family := range families {
+		if len(family.GetMetric()) > 0 {
+			metric := family.GetMetric()[0]
+			if metric.Gauge != nil {
+				values[family.GetName()] = metric.GetGauge().GetValue()
+			} else if metric.Counter != nil {
+				values[family.GetName()] = metric.GetCounter().GetValue()
+			}
+		}
+	}
+	assert.Equal(t, float64(12), values["obi_large_buffer_dropped_bytes_total"])
+	assert.Equal(t, float64(3), values["obi_queue_length"])
+	assert.Equal(t, float64(2), values["obi_otel_trace_spans_dropped_total"])
+	assert.Contains(t, values, "go_memstats_heap_alloc_bytes")
+}
+
 type noopEmbeddingReporter struct {
 	NoopReporter
 }

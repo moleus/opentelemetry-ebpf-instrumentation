@@ -66,6 +66,19 @@ func TestAppendChunk_multipleChunks(t *testing.T) {
 	assert.Equal(t, 9, r.Remaining())
 }
 
+func TestAppendChunkWithLimit_boundsBytesAndCoalescesTinyChunks(t *testing.T) {
+	lb := NewLargeBuffer()
+	dropped := 0
+	for i := 0; i < 100; i++ {
+		dropped += lb.AppendChunkWithLimit([]byte("x"), 50)
+	}
+
+	assert.Equal(t, 50, lb.Len())
+	assert.Equal(t, 50, dropped)
+	assert.LessOrEqual(t, len(lb.chunks), 1)
+	assert.Equal(t, string(bytes.Repeat([]byte("x"), 50)), string(lb.CloneBytes()))
+}
+
 // ── ReadN ─────────────────────────────────────────────────────────────────────
 
 func TestReadN_withinChunk_zeroCopy(t *testing.T) {

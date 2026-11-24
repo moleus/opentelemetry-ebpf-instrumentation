@@ -38,6 +38,9 @@ func TestInternalPrometheusNames(t *testing.T) {
 		{internal.BpfRingbufWrites, "obi_bpf_ringbuf_writes_total"},
 		{internal.BpfRingbufWriteFailures, "obi_bpf_ringbuf_write_failures_total"},
 		{internal.QueueCapacityRatio, "obi_queue_capacity_ratio"},
+		{internal.QueueLength, "obi_queue_length"},
+		{internal.LargeBufferDroppedBytes, "obi_large_buffer_dropped_bytes_total"},
+		{internal.TraceSpansDropped, "obi_otel_trace_spans_dropped_total"},
 	}
 
 	for _, test := range tests {
@@ -81,6 +84,9 @@ func TestInternalMetricsAllDeclared(t *testing.T) {
 		"BpfRingbufWrites":         internal.BpfRingbufWrites,
 		"BpfRingbufWriteFailures":  internal.BpfRingbufWriteFailures,
 		"QueueCapacityRatio":       internal.QueueCapacityRatio,
+		"QueueLength":              internal.QueueLength,
+		"LargeBufferDroppedBytes":  internal.LargeBufferDroppedBytes,
+		"TraceSpansDropped":        internal.TraceSpansDropped,
 	} {
 		t.Run(name, func(t *testing.T) {
 			require.NotEmpty(t, m.OTEL, "OTEL name must be set")

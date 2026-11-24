@@ -36,6 +36,7 @@ type queueConfig struct {
 	panicOnTimeout   bool
 	// maps any implementation of imetrics.Reporter's QueueBufferUtilization(subscriber string, ratio float64)
 	utilizationGauge func(string, float64)
+	queueLengthGauge func(string, int)
 }
 
 var defaultQueueConfig = queueConfig{
@@ -46,6 +47,7 @@ var defaultQueueConfig = queueConfig{
 	panicOnTimeout:   false,
 	// default to noop
 	utilizationGauge: func(string, float64) {},
+	queueLengthGauge: func(string, int) {},
 }
 
 // QueueOpts allow configuring some operation of a queue
@@ -96,13 +98,17 @@ func ClosingAttempts(attempts int) QueueOpts {
 func InternalMetrics(p imetrics.Reporter) QueueOpts {
 	return func(c *queueConfig) {
 		c.utilizationGauge = p.QueueBufferUtilization
+		if reporter, ok := p.(interface{ QueueLength(string, int) }); ok {
+			c.queueLengthGauge = reporter.QueueLength
+		}
 	}
 }
 
 type dst[T any] struct {
-	name  string
-	ch    chan T
-	gauge func(string, float64)
+	name             string
+	ch               chan T
+	gauge            func(string, float64)
+	queueLengthGauge func(string, int)
 }
 
 // sink holds the mutable, shared delivery state of a group of queues connected through Bypass.
@@ -158,6 +164,7 @@ func NewQueue[T any](opts ...QueueOpts) *Queue[T] {
 	// if channel capacity is set to zero, disable capacity ratio metrics to avoid divisions by zero
 	if cfg.channelBufferLen <= 0 {
 		cfg.utilizationGauge = func(string, float64) {}
+		cfg.queueLengthGauge = func(string, int) {}
 	}
 
 	q := &Queue[T]{
@@ -225,6 +232,7 @@ func (s *sink[T]) send(ctx context.Context, o T, route []string) {
 	for _, d := range dsts {
 		// report channel len/capacity ratio metrics
 		d.gauge(d.name, float64(len(d.ch))/float64(cap(d.ch)))
+		d.queueLengthGauge(d.name, len(d.ch))
 		select {
 		case <-ctx.Done():
 			return
@@ -314,9 +322,10 @@ func (q *Queue[T]) Subscribe(options ...SubscribeOpt) <-chan T {
 	defer s.mt.Unlock()
 	ch := make(chan T, s.cfg.channelBufferLen)
 	s.dsts = append(s.dsts, dst[T]{
-		ch:    ch,
-		name:  opts.subscriber,
-		gauge: s.cfg.utilizationGauge,
+		ch:               ch,
+		name:             opts.subscriber,
+		gauge:            s.cfg.utilizationGauge,
+		queueLengthGauge: s.cfg.queueLengthGauge,
 	})
 	return ch
 }
