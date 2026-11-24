@@ -224,8 +224,8 @@ func TestScaledMaxEntriesMatchesSetupMapSizes(t *testing.T) {
 		}
 	}
 
-	if got := ScaledMaxEntries(&ebpf.MapSpec{Type: ebpf.RingBuf, MaxEntries: 1 << 20}, -3); got != 128<<10 {
-		t.Errorf("ringbuf scaled by -3: got %d, want %d", got, 128<<10)
+	if got := ScaledMaxEntries(&ebpf.MapSpec{Type: ebpf.RingBuf, MaxEntries: 1 << 20}, -3); got != 1<<20 {
+		t.Errorf("ringbuf scaled by -3 must keep its size: got %d, want %d", got, 1<<20)
 	}
 }
 
@@ -270,5 +270,45 @@ func TestAlignMaxEntriesIfRingBuf(t *testing.T) {
 
 	if hash.MaxEntries != pageSize+1 {
 		t.Errorf("non-ringbuf map should not be realigned: got %d", hash.MaxEntries)
+	}
+}
+func TestSetupMapSizes_RingBufDoesNotShrink(t *testing.T) {
+	pageSize := uint32(os.Getpagesize())
+	spec := makeSpec(map[string]*ebpf.MapSpec{
+		"events":     {Type: ebpf.RingBuf, MaxEntries: 1 << 20},
+		"user_ring":  {Type: ebpf.UserRingbuf, MaxEntries: 16 * pageSize},
+		"my_hash":    {Type: ebpf.Hash, MaxEntries: 1024},
+		"my_lru":     {Type: ebpf.LRUHash, MaxEntries: 4096},
+		"small_ring": {Type: ebpf.RingBuf, MaxEntries: pageSize},
+	})
+
+	SetupMapSizes(spec, -3)
+
+	if got := spec.Maps["events"].MaxEntries; got != 1<<20 {
+		t.Errorf("ring buffer must not shrink: got %d, want %d", got, 1<<20)
+	}
+	if got := spec.Maps["user_ring"].MaxEntries; got != 16*pageSize {
+		t.Errorf("user ring buffer must not shrink: got %d, want %d", got, 16*pageSize)
+	}
+	if got := spec.Maps["small_ring"].MaxEntries; got != pageSize {
+		t.Errorf("small ring buffer must not shrink: got %d, want %d", got, pageSize)
+	}
+	if got := spec.Maps["my_hash"].MaxEntries; got != 128 {
+		t.Errorf("hash maps still shrink: got %d, want 128", got)
+	}
+	if got := spec.Maps["my_lru"].MaxEntries; got != 512 {
+		t.Errorf("LRU maps still shrink: got %d, want 512", got)
+	}
+}
+
+func TestSetupMapSizes_RingBufGrows(t *testing.T) {
+	spec := makeSpec(map[string]*ebpf.MapSpec{
+		"events": {Type: ebpf.RingBuf, MaxEntries: 1 << 20},
+	})
+
+	SetupMapSizes(spec, 1)
+
+	if got := spec.Maps["events"].MaxEntries; got != 2<<20 {
+		t.Errorf("ring buffer should grow: got %d, want %d", got, 2<<20)
 	}
 }

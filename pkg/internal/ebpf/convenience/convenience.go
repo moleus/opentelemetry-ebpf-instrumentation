@@ -128,10 +128,16 @@ func isResizableMapType(t ebpf.MapType) bool {
 	}
 }
 
+// isRingBuf returns true for the ring buffer map types.
+func isRingBuf(t ebpf.MapType) bool {
+	return t == ebpf.RingBuf || t == ebpf.UserRingbuf
+}
+
 // SetupMapSizes scales all resizable maps in the spec by globalScaleFactor.
 // If globalScaleFactor > 0, sizes are doubled that many times (left shift).
 // If globalScaleFactor < 0, sizes are halved that many times (right shift).
 // Maps with PinByName are skipped regardless of scale factor.
+// Ring buffers only grow; see ScaledMaxEntries.
 func SetupMapSizes(spec *ebpf.CollectionSpec, globalScaleFactor int) {
 	if globalScaleFactor == 0 {
 		return
@@ -142,10 +148,21 @@ func SetupMapSizes(spec *ebpf.CollectionSpec, globalScaleFactor int) {
 	}
 }
 
+// ScaledMaxEntries returns the size of a map after scaling by globalScaleFactor.
+// The loader and the ring buffer wakeup threshold both use it, so they agree on
+// the ring buffer size.
+//
+// Ring buffers only grow: a ring buffer that is too small drops the events of a
+// burst, and the spans with them. A hash map that is too small also loses state: an
+// LRU hash evicts its oldest entry, and a plain hash rejects a new entry (E2BIG) when
+// it is full. A ring buffer holds events in transit, not state per request, and has
+// no way to keep the oldest events: with the ring buffers shrunk at scale -3, a test
+// with 1500 requests per second lost 94% of the spans.
 func ScaledMaxEntries(mSpec *ebpf.MapSpec, globalScaleFactor int) uint32 {
 	oldEntries := mSpec.MaxEntries
 
 	if globalScaleFactor == 0 ||
+		(globalScaleFactor < 0 && isRingBuf(mSpec.Type)) ||
 		!isResizableMapType(mSpec.Type) ||
 		oldEntries < MinResizableMapSize ||
 		mSpec.Pinning == ebpf.PinByName {

@@ -118,7 +118,8 @@ func TestWakeupDataBytesUsesScaledRingBufSize(t *testing.T) {
 	setContextPropagationSupportForTest(t, false)
 
 	cfg := &obi.Config{}
-	cfg.EBPF.WakeupLen = 500
+	// large enough that half of the full-size ring buffer caps the wakeup threshold
+	cfg.EBPF.WakeupLen = 5000
 	cfg.EBPF.MapsConfig.GlobalScaleFactor = -3
 	tracer := New(nil, cfg, imetrics.NoopReporter{})
 
@@ -128,7 +129,8 @@ func TestWakeupDataBytesUsesScaledRingBufSize(t *testing.T) {
 
 	ebpfconvenience.SetupMapSizes(bundles[0].Spec, cfg.EBPF.MapsConfig.GlobalScaleFactor)
 	loadedRingBufSize := bundles[0].Spec.Maps[BpfMapEvents].MaxEntries
-	require.Equal(t, uint32(128<<10), loadedRingBufSize)
+	// ring buffers keep their full size for a negative scale factor
+	require.Equal(t, uint32(1<<20), loadedRingBufSize)
 
 	wakeup, ok := bundles[0].Constants["wakeup_data_bytes"].(uint32)
 	require.True(t, ok)
