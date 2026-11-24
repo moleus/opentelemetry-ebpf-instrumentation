@@ -2803,3 +2803,11 @@ func TestHTTPServerAddressFromRequestHost(t *testing.T) {
 		})
 	}
 }
+
+func TestUnknownHTTPResponseBodySizeIsNotExported(t *testing.T) {
+	attrs := map[attr.Name]struct{}{attr.HTTPResponseBodySize: {}}
+	span := &request.Span{Type: request.EventTypeHTTP, ResponseLength: -1}
+	require.Empty(t, appendHTTPResponseBodySize(nil, span, attrs))
+	span.ResponseLength = 0
+	require.Len(t, appendHTTPResponseBodySize(nil, span, attrs), 1)
+}

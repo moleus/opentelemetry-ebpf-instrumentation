@@ -67,6 +67,13 @@ func HTTPRequestTraceToSpan(parseCtx *EBPFParseContext, trace *HTTPRequestTrace)
 		fullPath = path + "?" + rawQuery
 	}
 
+	responseLength := trace.ResponseLength
+	if request.EventType(trace.Type) == request.EventTypeHTTP {
+		// The Go HTTP server uprobe never records bytes written. Zero is not
+		// a measurement, so do not emit it as the response body length.
+		responseLength = -1
+	}
+
 	span := request.Span{
 		Type:           request.EventType(trace.Type),
 		Method:         method,
@@ -78,7 +85,7 @@ func HTTPRequestTraceToSpan(parseCtx *EBPFParseContext, trace *HTTPRequestTrace)
 		Host:           hostname,
 		HostPort:       hostPort,
 		ContentLength:  trace.ContentLength,
-		ResponseLength: trace.ResponseLength,
+		ResponseLength: responseLength,
 		RequestStart:   int64(trace.GoStartMonotimeNs),
 		Start:          int64(trace.StartMonotimeNs),
 		End:            int64(trace.EndMonotimeNs),
