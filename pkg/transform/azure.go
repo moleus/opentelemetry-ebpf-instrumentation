@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v9"
@@ -47,6 +48,10 @@ func azureScope(node *metadata.NodeMeta, cfg AzureNameResolverConfig) AzureNameR
 	return cfg
 }
 
+func azureInventoryCredential() (azcore.TokenCredential, error) {
+	return azidentity.NewManagedIdentityCredential(nil)
+}
+
 // localAzureInstanceID requires detected identity and a matching discovery scope.
 // An override can discover remote peers without renaming this host's processes.
 func localAzureInstanceID(node *metadata.NodeMeta, cfg *NameResolverConfig) string {
@@ -71,7 +76,7 @@ func azureInventoryRefresher(node *metadata.NodeMeta, cfg AzureNameResolverConfi
 	if scope.SubscriptionID == "" || scope.ResourceGroup == "" {
 		return nil, errors.New("initializing Azure name resolver: configure service_name.azure.subscription_id and resource_group when cloud metadata does not supply them")
 	}
-	credential, err := azidentity.NewDefaultAzureCredential(nil)
+	credential, err := azureInventoryCredential()
 	if err != nil {
 		return nil, fmt.Errorf("loading Azure credentials: %w", err)
 	}
