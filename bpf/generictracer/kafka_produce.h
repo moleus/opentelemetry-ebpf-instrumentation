@@ -36,9 +36,33 @@ enum {
     k_kafka_acks_unknown = 0x10000,
 };
 
-static __always_inline u32 kafka_be16(const unsigned char *b, u32 off) {
-    return ((u32)b[off & (k_kafka_produce_window - 1)] << 8) |
-           (u32)b[(off + 1) & (k_kafka_produce_window - 1)];
+// Bounds an offset that the caller has already checked against captured. That check does not
+// give the verifier a bound: the compiler drops a check that captured <= the window implies,
+// and kernels before 6.8 do not bound a register by a compare with another register. The empty
+// asm hides the range from the compiler, so the compiler keeps the mask; the mask bounds the
+// map-value pointer. For a checked offset the mask does not change the value.
+static __always_inline u32 kafka_window_off(u32 off) {
+    asm volatile("" : "+r"(off));
+    return off & (k_kafka_produce_window - 1);
+}
+
+static __always_inline u32 kafka_be16(const unsigned char *b, u32 off, u32 captured) {
+    // Use subtraction after guarding captured to avoid an overflowing off + 2 expression.
+    if (captured < 2 || off > k_kafka_produce_window - 2 || off > captured - 2) {
+        return k_kafka_acks_unknown;
+    }
+    off = kafka_window_off(off);
+    return ((u32)b[off] << 8) | (u32)b[off + 1];
+}
+
+// Narrow parser-controlled string lengths before adding them to an offset. The BPF verifier
+// does not infer a 16-bit range from two byte loads combined with shift/OR, so keep it explicit.
+static __always_inline u32 kafka_unsigned16(const unsigned char *b, u32 off, u32 captured) {
+    const u32 value = kafka_be16(b, off, captured);
+    if (value == k_kafka_acks_unknown) {
+        return k_kafka_acks_unknown;
+    }
+    return (u16)value;
 }
 
 static __always_inline u32 kafka_be32(const unsigned char *b) {
@@ -54,17 +78,20 @@ static __always_inline int kafka_produce_acks(const unsigned char *buf, u32 capt
     if (captured < k_kafka_produce_fixed_header_len + 2) {
         return k_kafka_acks_unknown;
     }
-    if (kafka_be16(buf, 4) != k_kafka_api_key_produce) {
+    if (kafka_be16(buf, 4, captured) != k_kafka_api_key_produce) {
         return k_kafka_acks_unknown;
     }
-    const u32 version = kafka_be16(buf, 6);
+    const u32 version = kafka_be16(buf, 6, captured);
     if (version > k_kafka_max_produce_api_version) {
         return k_kafka_acks_unknown;
     }
 
     u32 off = k_kafka_produce_fixed_header_len;
     // client_id: int16 length, -1 is null
-    u32 n = kafka_be16(buf, off);
+    u32 n = kafka_unsigned16(buf, off, captured);
+    if (n == k_kafka_acks_unknown) {
+        return k_kafka_acks_unknown;
+    }
     off += 2;
     if (n >= 0x8000) {
         if (n != 0xffff) {
@@ -76,7 +103,7 @@ static __always_inline int kafka_produce_acks(const unsigned char *buf, u32 capt
 
     if (version >= k_kafka_produce_first_flexible_version) {
         // no tagged fields: a single 0 byte
-        if (off >= captured || buf[off & (k_kafka_produce_window - 1)] != 0) {
+        if (off >= captured || buf[kafka_window_off(off)] != 0) {
             return k_kafka_acks_unknown;
         }
         off += 1;
@@ -87,7 +114,7 @@ static __always_inline int kafka_produce_acks(const unsigned char *buf, u32 capt
             if (off >= captured) {
                 return k_kafka_acks_unknown;
             }
-            const u32 b = buf[off & (k_kafka_produce_window - 1)];
+            const u32 b = buf[kafka_window_off(off)];
             off += 1;
             if (b >= 0x80) {
                 return k_kafka_acks_unknown;
@@ -96,10 +123,13 @@ static __always_inline int kafka_produce_acks(const unsigned char *buf, u32 capt
                 off += b - 1;
             }
         } else {
-            if (off + 2 > captured) {
+            if (captured < 2 || off > captured - 2) {
                 return k_kafka_acks_unknown;
             }
-            n = kafka_be16(buf, off);
+            n = kafka_unsigned16(buf, off, captured);
+            if (n == k_kafka_acks_unknown) {
+                return k_kafka_acks_unknown;
+            }
             off += 2;
             if (n >= 0x8000) {
                 if (n != 0xffff) {
@@ -110,10 +140,10 @@ static __always_inline int kafka_produce_acks(const unsigned char *buf, u32 capt
             off += n;
         }
     }
-    if (off + 2 > captured) {
+    if (captured < 2 || off > captured - 2) {
         return k_kafka_acks_unknown;
     }
-    const u32 acks = kafka_be16(buf, off);
+    const u32 acks = kafka_be16(buf, off, captured);
     return (acks >= 0x8000) ? (int)acks - 0x10000 : (int)acks;
 }
 
