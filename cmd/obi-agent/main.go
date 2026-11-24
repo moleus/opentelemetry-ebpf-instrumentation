@@ -17,6 +17,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -211,6 +212,11 @@ func startHTTP(addr string, reg *prometheus.Registry, w *rulesWatcher, smp *samp
 		_, _ = rw.Write([]byte("ok\n"))
 	})
 	mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+	if os.Getenv("OBI_AGENT_PPROF") != "" {
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	}
 	mux.HandleFunc("GET /rules", func(rw http.ResponseWriter, _ *http.Request) {
 		rw.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(rw).Encode(map[string]any{"file": w.status(), "rules": describe(smp.Rules(), time.Now())})
