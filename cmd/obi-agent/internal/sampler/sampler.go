@@ -39,6 +39,8 @@ type state struct {
 	set            *rules.Set
 	defaultSampler sdktrace.Sampler
 	ruleSamplers   []sdktrace.Sampler
+	// ruleLimiters are used by the Decide goroutine only; a rules change starts them again
+	ruleLimiters []limiter
 }
 
 type metrics struct {
@@ -74,6 +76,7 @@ func (s *Sampler) SetRules(set *rules.Set) {
 	for i := range set.Rules {
 		st.ruleSamplers = append(st.ruleSamplers, ratioSampler(set.Rules[i].Ratio))
 	}
+	st.ruleLimiters = make([]limiter, len(set.Rules))
 	s.state.Store(st)
 }
 
@@ -87,9 +90,13 @@ func (s *Sampler) Decide(span *request.Span) bool {
 	st := s.state.Load()
 	now := s.now()
 
-	name, action, ratio := s.selectAction(st, span, now)
+	index, name, action, ratio := s.selectAction(st, span, now)
 	if !keepByAction(span, action, ratio) {
 		s.metrics.dropped.WithLabelValues(name, reasonRatio).Inc()
+		return false
+	}
+	if index >= 0 && !st.ruleLimiters[index].allow(now, st.set.Rules[index].SpansPerSecond, st.set.Rules[index].SpansPerSecond) {
+		s.metrics.dropped.WithLabelValues(name, reasonRateLimit).Inc()
 		return false
 	}
 	if !s.limiter.allow(now, st.set.Limits.SpansPerSecond, st.set.Limits.Burst) {
@@ -100,15 +107,16 @@ func (s *Sampler) Decide(span *request.Span) bool {
 	return true
 }
 
-func (s *Sampler) selectAction(st *state, span *request.Span, now time.Time) (string, rules.Action, sdktrace.Sampler) {
+// selectAction returns the index of the rule that decides (-1 for the default), its name and action.
+func (s *Sampler) selectAction(st *state, span *request.Span, now time.Time) (int, string, rules.Action, sdktrace.Sampler) {
 	attrs := spanAttrs(span)
 	for i := range st.set.Rules {
 		r := &st.set.Rules[i]
 		if r.ActiveAt(now) && r.Matches(&attrs) {
-			return ruleName(r, i), r.Action, st.ruleSamplers[i]
+			return i, ruleName(r, i), r.Action, st.ruleSamplers[i]
 		}
 	}
-	return defaultRuleName, st.set.Default, st.defaultSampler
+	return -1, defaultRuleName, st.set.Default, st.defaultSampler
 }
 
 func (s *Sampler) activeRules() int {
@@ -150,5 +158,6 @@ func spanAttrs(span *request.Span) rules.Attrs {
 		Workload:  md[attr.K8sOwnerName],
 		Service:   span.Service.UID.Name,
 		Kind:      strings.ToLower(strings.TrimPrefix(span.ServiceGraphKind(), spanKindPrefix)),
+		Name:      span.TraceName(),
 	}
 }

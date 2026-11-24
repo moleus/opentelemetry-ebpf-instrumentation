@@ -332,7 +332,7 @@ update-python-offsets:
 #
 ################################################################################
 
-BPF_ROOT = pkg/
+BPF_ROOT = pkg/ cmd/
 
 BPF_SUPPORTED_TARGETS := amd64 arm64
 BPF_TARGETS ?= amd64,arm64

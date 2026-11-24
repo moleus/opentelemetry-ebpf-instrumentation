@@ -74,6 +74,16 @@ func TestParse_Errors(t *testing.T) {
 	}
 }
 
+func TestParse_OwnLimitNeedsNoUntil(t *testing.T) {
+	set, err := Parse([]byte(`rules: [{name: crashes, match: {name: "SIG*", kind: internal}, ratio: 1, spans_per_second: 1}]`), now)
+	require.NoError(t, err)
+	assert.True(t, set.Rules[0].Matches(&Attrs{Name: "SIGSEGV", Kind: "internal"}))
+	assert.False(t, set.Rules[0].Matches(&Attrs{Name: "GET /", Kind: "internal"}))
+
+	_, err = Parse([]byte("rules: [{ratio: 1, spans_per_second: -1}]"), now)
+	assert.Error(t, err)
+}
+
 func TestParse_LessThanDefaultNeedsNoUntil(t *testing.T) {
 	_, err := Parse([]byte("default: {ratio: 0.5, errors: true}\nrules: [{ratio: 0.1, errors: true}]"), now)
 	assert.NoError(t, err)

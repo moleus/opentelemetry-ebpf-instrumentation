@@ -27,10 +27,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"go.opentelemetry.io/obi/cmd/obi-agent/internal/fatalsignal"
 	"go.opentelemetry.io/obi/cmd/obi-agent/internal/rules"
 	"go.opentelemetry.io/obi/cmd/obi-agent/internal/sampler"
 	"go.opentelemetry.io/obi/internal/config/convert"
 	"go.opentelemetry.io/obi/internal/config/schema"
+	"go.opentelemetry.io/obi/pkg/appolly/discover"
 	"go.opentelemetry.io/obi/pkg/buildinfo"
 	obicfg "go.opentelemetry.io/obi/pkg/config"
 	"go.opentelemetry.io/obi/pkg/instrumenter"
@@ -42,6 +44,7 @@ const (
 	envRulesPath      = "OBI_AGENT_RULES_PATH"
 	envReloadInterval = "OBI_AGENT_RULES_RELOAD_INTERVAL"
 	envHTTPAddr       = "OBI_AGENT_HTTP_ADDR"
+	envTracers        = "OBI_AGENT_TRACERS"
 
 	defaultRulesPath      = "/etc/obi-agent/rules.yaml"
 	defaultReloadInterval = 10 * time.Second
@@ -54,7 +57,14 @@ const (
 type envConfig struct {
 	rulesPath      string
 	reloadInterval time.Duration
-	httpAddr       string // empty: no HTTP server
+	httpAddr       string   // empty: no HTTP server
+	tracers        []string // additional eBPF tracers, see extraTracers
+}
+
+// extraTracers are the eBPF tracers of the agent that OBI does not have. They are enabled by name
+// in OBI_AGENT_TRACERS (comma-separated).
+var extraTracers = map[string]discover.TracerFactory{
+	"fatalsignal": fatalsignal.Factory,
 }
 
 func main() {
@@ -93,6 +103,11 @@ func run() int {
 		return 1
 	}
 
+	for _, name := range env.tracers {
+		discover.RegisterTracers(extraTracers[name])
+		slog.Info("additional tracer enabled", "tracer", name)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -122,6 +137,15 @@ func loadEnv() (envConfig, error) {
 	}
 	if v, ok := os.LookupEnv(envHTTPAddr); ok {
 		env.httpAddr = v
+	}
+	for _, name := range strings.Split(os.Getenv(envTracers), ",") {
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		if _, ok := extraTracers[name]; !ok {
+			return env, fmt.Errorf("%s: unknown tracer %q", envTracers, name)
+		}
+		env.tracers = append(env.tracers, name)
 	}
 	if v, ok := os.LookupEnv(envReloadInterval); ok {
 		d, err := time.ParseDuration(v)
