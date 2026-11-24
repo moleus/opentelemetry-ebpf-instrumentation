@@ -21,6 +21,7 @@
 #include <common/connection_info.h>
 #include <common/event_source.h>
 #include <common/http_types.h>
+#include <common/kafka_produce_topics.h>
 #include <common/tp_info.h>
 
 #include <pid/types/pid_info.h>
@@ -120,6 +121,7 @@ typedef struct kafka_client_req {
     unsigned char buf[k_kafka_max_len];
     connection_info_t conn;
     pid_info_t pid;
+    kafka_produce_topics_t topics;
 } kafka_client_req_t;
 
 typedef struct kafka_go_req {

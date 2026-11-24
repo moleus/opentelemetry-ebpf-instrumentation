@@ -20,14 +20,19 @@
 
 #include <common/preempt_guard.h>
 #include <common/ringbuf.h>
+#include <common/scratch_mem.h>
 
 #include <gotracer/go_common.h>
+#include <gotracer/go_sarama_produce.h>
 
 #include <gotracer/maps/kafka.h>
 
 #include <gotracer/types/kafka.h>
 
 #include <logger/bpf_dbg.h>
+
+// The request is too large for the BPF stack.
+SCRATCH_MEM_TYPED(sarama_req, kafka_client_req_t)
 
 SEC("uprobe/sarama_sendInternal")
 int GUARDED_PROG(obi_uprobe_sarama_sendInternal, struct pt_regs *, ctx) {
@@ -87,12 +92,15 @@ int GUARDED_PROG(obi_uprobe_sarama_broker_write, struct pt_regs *, ctx) {
         bpf_dbg_printk("api_key=%d", api_key);
 
         // We only care about fetch and produce
+        kafka_client_req_t *req = 0;
         if (api_key == k_kafka_api_fetch || api_key == k_kafka_api_produce) {
+            req = sarama_req_mem();
+        }
+        if (req) {
             u32 correlation_id = invocation->correlation_id;
-            kafka_client_req_t req = {
-                .type = k_event_type_go_kafka,
-                .start_monotime_ns = invocation->start_monotime_ns,
-            };
+            __builtin_memset(req, 0, sizeof(kafka_client_req_t));
+            req->type = k_event_type_go_kafka;
+            req->start_monotime_ns = invocation->start_monotime_ns;
 
             void *conn_conn_ptr =
                 (void *)(b_ptr + go_offset_of(ot, (go_offset){.v = _sarama_broker_conn_pos}));
@@ -112,9 +120,9 @@ int GUARDED_PROG(obi_uprobe_sarama_broker_write, struct pt_regs *, ctx) {
                         &conn_ptr, sizeof(conn_ptr), (void *)(tcp_conn_ptr + 8)); // find conn
                     bpf_dbg_printk("conn_ptr=%llx", conn_ptr);
                     if (conn_ptr) {
-                        const u8 ok = get_conn_info(conn_ptr, &req.conn);
+                        const u8 ok = get_conn_info(conn_ptr, &req->conn);
                         if (!ok) {
-                            __builtin_memset(&req.conn, 0, sizeof(connection_info_t));
+                            __builtin_memset(&req->conn, 0, sizeof(connection_info_t));
                         }
                     }
                 }
@@ -122,24 +130,34 @@ int GUARDED_PROG(obi_uprobe_sarama_broker_write, struct pt_regs *, ctx) {
 
             bpf_dbg_printk("correlation_id=%d, promise=%llx", correlation_id, invocation->promise);
 
-            bpf_probe_read(req.buf, k_kafka_max_len, buf_ptr);
+            bpf_probe_read(req->buf, k_kafka_max_len, buf_ptr);
+
+            // The record data of each topic comes before the next topic, so the buffer
+            // prefix holds only the first topic: read all topic names from the full request.
+            // The wire api key of Produce is 0 (k_kafka_api_* are the kafka-go operations).
+            if (api_key == k_sarama_produce_api_key) {
+                const u64 buf_len = (u64)GO_PARAM3(ctx);
+                sarama_produce_topics(
+                    buf_ptr, buf_len > 0xffffffff ? 0xffffffff : (u32)buf_len, &req->topics);
+                bpf_dbg_printk("produce topics=%d, named=%d", req->topics.total, req->topics.count);
+            }
 
             // if there's no callback we report the event right away, there's no
             // easy way to correlate with the response
             if (!invocation->promise) {
-                req.end_monotime_ns = bpf_ktime_get_ns();
+                req->end_monotime_ns = bpf_ktime_get_ns();
                 kafka_client_req_t *trace = events_ringbuf_reserve(sizeof(kafka_client_req_t), 0);
                 if (trace) {
                     bpf_dbg_printk("Sending kafka client go trace");
 
-                    bpf_memcpy(trace, &req, sizeof(kafka_client_req_t));
+                    __builtin_memcpy(trace, req, sizeof(kafka_client_req_t));
                     task_pid(&trace->pid);
                     bpf_ringbuf_submit(trace, get_flags());
                 }
             } else {
                 go_addr_key_t k_key = {};
                 go_addr_key_from_id(&k_key, (void *)(uintptr_t)invocation->promise);
-                bpf_map_update_elem(&kafka_requests, &k_key, &req, BPF_ANY);
+                bpf_map_update_elem(&kafka_requests, &k_key, req, BPF_ANY);
             }
         }
     }
