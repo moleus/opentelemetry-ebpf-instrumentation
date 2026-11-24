@@ -87,6 +87,10 @@ type ContextInfo struct {
 	// the runtime-selected targets for each signal view. Pass via instrumenter.WithDynamicSelector.
 	DynamicSelector selection.MultiSignalPIDSelector
 	CriteriaUpdates *services.CriteriaUpdates
+
+	// TraceDecider, when set, decides for every application span whether it is exported as a trace.
+	// It runs after the dynamic selector and before the traces exporters; the span metrics are not affected.
+	TraceDecider TraceDecider
 }
 
 // AppO11y stores context information that is only required for application observability.
@@ -100,3 +104,7 @@ type AppO11y struct {
 func NewEBPFReverseDNS(ctx context.Context, ebpfCfg *config.EBPFTracer, cfgs ...*rdns.ReverseDNS) *rdns.EBPFLookup {
 	return rdns.NewEBPFLookup(ctx, ebpfCfg, cfgs...)
 }
+
+// TraceDecider returns false for a span that must not be exported as a trace. It is called from one
+// goroutine of the pipeline, for every span, so it must be fast and must not keep the pointer.
+type TraceDecider func(span *request.Span) bool
